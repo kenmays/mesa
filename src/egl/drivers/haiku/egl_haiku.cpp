@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <new>
 
 #include <algorithm>
 
@@ -65,6 +66,60 @@ extern "C" {
 #endif
 #define ERROR(x...) printf("egl_haiku: " x)
 
+_EGL_DRIVER_STANDARD_TYPECASTS(haiku_egl)
+
+class HaikuNativeSurface : public BitmapHook {
+public:
+   explicit HaikuNativeSurface(BitmapHook *window)
+      : fWindow(window), fMutexInitialized(false)
+   {
+      if (fWindow != NULL)
+         fMutexInitialized = mtx_init(&fMutex, mtx_plain) == thrd_success;
+   }
+
+   ~HaikuNativeSurface() override
+   {
+      if (fMutexInitialized)
+         mtx_destroy(&fMutex);
+   }
+
+   bool IsValid() const
+   {
+      return fWindow != NULL && fMutexInitialized;
+   }
+
+   void GetSize(uint32_t &width, uint32_t &height) override
+   {
+      if (!IsValid()) {
+         width = 0;
+         height = 0;
+         return;
+      }
+
+      mtx_lock(&fMutex);
+      fWindow->GetSize(width, height);
+      mtx_unlock(&fMutex);
+   }
+
+   BBitmap *SetBitmap(BBitmap *bitmap) override
+   {
+      BBitmap *previous;
+
+      if (!IsValid())
+         return NULL;
+
+      mtx_lock(&fMutex);
+      previous = fWindow->SetBitmap(bitmap);
+      mtx_unlock(&fMutex);
+      return previous;
+   }
+
+private:
+   BitmapHook *fWindow;
+   mtx_t fMutex;
+   bool fMutexInitialized;
+};
+
 static unsigned
 haiku_visual_options(const struct _egl_config *conf, bool double_buffer)
 {
@@ -96,7 +151,7 @@ struct haiku_egl_surface {
    struct _egl_surface base;
    struct hgl_buffer *fb;
    struct pipe_fence_handle *throttle_fence;
-   BitmapHook *native_window;
+   HaikuNativeSurface *native_surface;
    bool is_window;
 };
 
@@ -131,11 +186,21 @@ haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
    struct st_visual visual;
    hgl_get_st_visual(&visual, haiku_visual_options(conf, true));
 
-   wgl_surf->native_window = (BitmapHook *)native_window;
+   wgl_surf->native_surface = new (std::nothrow)
+      HaikuNativeSurface((BitmapHook *)native_window);
+   if (wgl_surf->native_surface == NULL
+       || !wgl_surf->native_surface->IsValid()) {
+      delete wgl_surf->native_surface;
+      free(wgl_surf);
+      _eglError(EGL_BAD_ALLOC, "Haiku: creating native surface wrapper");
+      return NULL;
+   }
+
    wgl_surf->is_window = true;
-   wgl_surf->fb =
-      hgl_create_st_framebuffer(hgl_dpy->disp, &visual, native_window);
+   wgl_surf->fb = hgl_create_st_framebuffer(hgl_dpy->disp, &visual,
+                                             wgl_surf->native_surface);
    if (!wgl_surf->fb) {
+      delete wgl_surf->native_surface;
       free(wgl_surf);
       return NULL;
    }
@@ -204,11 +269,12 @@ haiku_destroy_surface(struct _egl_display *disp, struct _egl_surface *surf)
        * The winsys owns each BBitmap. Detach the native view before the
        * framebuffer releases its display-target references.
        */
-      if (hgl_surf->is_window && hgl_surf->native_window != NULL)
-         hgl_surf->native_window->SetBitmap(NULL);
+      if (hgl_surf->is_window && hgl_surf->native_surface != NULL)
+         hgl_surf->native_surface->SetBitmap(NULL);
 
       if (hgl_surf->fb != NULL)
          hgl_destroy_st_framebuffer(hgl_surf->fb);
+      delete hgl_surf->native_surface;
       free(surf);
    }
    return EGL_TRUE;
@@ -218,15 +284,19 @@ static void
 update_size(struct hgl_buffer *buffer)
 {
    uint32_t newWidth, newHeight;
+   BitmapHook *nativeSurface;
 
    if (buffer == NULL || buffer->winsysContext == NULL
        || !buffer->mutex_initialized)
       return;
 
-   ((BitmapHook *)buffer->winsysContext)->GetSize(newWidth, newHeight);
+   nativeSurface = (BitmapHook *)buffer->winsysContext;
+   nativeSurface->GetSize(newWidth, newHeight);
 
    mtx_lock(&buffer->mutex);
    if (buffer->newWidth != newWidth || buffer->newHeight != newHeight) {
+      /* Detach before validation releases the old display-target bitmap. */
+      nativeSurface->SetBitmap(NULL);
       buffer->newWidth = newWidth;
       buffer->newHeight = newHeight;
       p_atomic_inc(&buffer->base.stamp);
