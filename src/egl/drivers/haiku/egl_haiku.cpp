@@ -95,6 +95,8 @@ struct haiku_egl_surface {
    struct _egl_surface base;
    struct hgl_buffer *fb;
    struct pipe_fence_handle *throttle_fence;
+   BitmapHook *native_window;
+   bool is_window;
 };
 
 // #pragma mark EGLSurface
@@ -126,15 +128,14 @@ haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
    struct st_visual visual;
    hgl_get_st_visual(&visual, haiku_visual_options(conf, true));
 
+   wgl_surf->native_window = (BitmapHook *)native_window;
+   wgl_surf->is_window = true;
    wgl_surf->fb =
       hgl_create_st_framebuffer(hgl_dpy->disp, &visual, native_window);
    if (!wgl_surf->fb) {
       free(wgl_surf);
       return NULL;
    }
-
-   // Unset and delete previously set bitmap if any.
-   delete ((BitmapHook *)native_window)->SetBitmap(NULL);
 
    return &wgl_surf->base;
 }
@@ -170,6 +171,7 @@ haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf
    struct st_visual visual;
    hgl_get_st_visual(&visual, haiku_visual_options(conf, false));
 
+   wgl_surf->is_window = false;
    wgl_surf->fb = hgl_create_st_framebuffer(hgl_dpy->disp, &visual, NULL);
    if (!wgl_surf->fb) {
       free(wgl_surf);
@@ -186,19 +188,24 @@ haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf
 static EGLBoolean
 haiku_destroy_surface(struct _egl_display *disp, struct _egl_surface *surf)
 {
-   struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
    if (_eglPutSurface(surf)) {
       struct haiku_egl_surface *hgl_surf = haiku_egl_surface(surf);
-      struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
-      screen->fence_reference(screen, &hgl_surf->throttle_fence, NULL);
+      struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
 
-      // Unset bitmap to release ownership. Bitmap will be deleted later
-      // when destroying framebuffer.
-      BitmapHook *bitmapHook = (BitmapHook*)hgl_surf->fb->winsysContext;
-      if (bitmapHook != NULL)
-         bitmapHook->SetBitmap(NULL);
+      if (hgl_dpy != NULL && hgl_dpy->disp != NULL) {
+         struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
+         screen->fence_reference(screen, &hgl_surf->throttle_fence, NULL);
+      }
 
-      hgl_destroy_st_framebuffer(hgl_surf->fb);
+      /*
+       * The winsys owns each BBitmap. Detach the native view before the
+       * framebuffer releases its display-target references.
+       */
+      if (hgl_surf->is_window && hgl_surf->native_window != NULL)
+         hgl_surf->native_window->SetBitmap(NULL);
+
+      if (hgl_surf->fb != NULL)
+         hgl_destroy_st_framebuffer(hgl_surf->fb);
       free(surf);
    }
    return EGL_TRUE;
