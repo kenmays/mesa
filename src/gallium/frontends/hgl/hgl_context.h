@@ -40,6 +40,15 @@ extern "C" {
 
 typedef int64 context_id;
 
+/* Optional state-tracker attributes for EGL-created contexts. */
+struct hgl_context_attribs {
+    unsigned major;
+    unsigned minor;
+    unsigned flags;
+    unsigned context_flags;
+    int profile;
+};
+
 
 struct hgl_buffer
 {
@@ -86,6 +95,9 @@ void hgl_destroy_st_framebuffer(struct hgl_buffer *buffer);
 
 struct hgl_context *hgl_create_context(struct hgl_display *display,
     struct st_visual *visual, struct st_context *shared);
+struct hgl_context *hgl_create_context_with_attribs(
+    struct hgl_display *display, struct st_visual *visual,
+    struct st_context *shared, const struct hgl_context_attribs *attribs);
 void hgl_destroy_context(struct hgl_context *context);
 
 // hgl visual
