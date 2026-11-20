@@ -106,9 +106,10 @@ static struct _egl_surface *
 haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
                             void *native_window, const EGLint *attrib_list)
 {
-   if (native_window == NULL)
-      return _eglError(EGL_BAD_NATIVE_WINDOW,
-                       "Haiku: native window is NULL"), NULL;
+   if (native_window == NULL) {
+      _eglError(EGL_BAD_NATIVE_WINDOW, "Haiku: native window is NULL");
+      return NULL;
+   }
 
    printf("haiku_create_window_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
