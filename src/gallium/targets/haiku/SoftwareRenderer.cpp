@@ -1,0 +1,293 @@
+/*
+ * Haiku BGLRenderer adapter for Mesa's HGL frontend.
+ *
+ * This is the legacy OpenGL Kit entry point. EGL remains a separate frontend;
+ * this adapter deliberately uses the same HGL winsys and llvmpipe screen.
+ */
+
+#include <stdint.h>
+#include <stdio.h>
+
+#include <GLRenderer.h>
+#include <GLDispatcher.h>
+#include <GLView.h>
+#include <Bitmap.h>
+
+#include "pipe/p_context.h"
+#include "pipe/p_screen.h"
+#include "util/u_inlines.h"
+#include "util/u_thread.h"
+#include "state_tracker/st_context.h"
+#include "hgl_context.h"
+#include "hgl_sw_winsys.h"
+
+extern "C" {
+#include "target-helpers/inline_sw_helper.h"
+}
+
+class HaikuSoftwareRenderer final : public BGLRenderer, public BitmapHook {
+public:
+   HaikuSoftwareRenderer(BGLView *view, ulong options,
+                         BGLDispatcher *dispatcher)
+      : BGLRenderer(view, options, dispatcher),
+        fWinsys(nullptr), fScreen(nullptr), fDisplay(nullptr),
+        fFramebuffer(nullptr), fContext(nullptr), fBitmap(nullptr),
+        fMutexInitialized(false), fReady(false), fCurrent(false),
+        fWidth(0), fHeight(0)
+   {
+      if (view == nullptr || mtx_init(&fMutex, mtx_plain) != thrd_success)
+         return;
+      fMutexInitialized = true;
+
+      fWinsys = hgl_create_sw_winsys();
+      if (fWinsys == nullptr)
+         return;
+
+      fScreen = sw_screen_create(fWinsys);
+      if (fScreen == nullptr) {
+         fWinsys->destroy(fWinsys);
+         fWinsys = nullptr;
+         return;
+      }
+      /* sw_screen_create transfers winsys ownership to the screen. */
+      fWinsys = nullptr;
+
+      fDisplay = hgl_create_display(fScreen);
+      if (fDisplay == nullptr)
+         return;
+
+      hgl_get_st_visual(&fVisual, options);
+      if (fVisual.color_format == PIPE_FORMAT_NONE)
+         return;
+
+      fFramebuffer = hgl_create_st_framebuffer(fDisplay, &fVisual, this);
+      if (fFramebuffer == nullptr)
+         return;
+
+      fContext = hgl_create_context(fDisplay, &fVisual, nullptr);
+      if (fContext == nullptr)
+         return;
+
+      GetSize(fWidth, fHeight);
+      fFramebuffer->newWidth = fWidth;
+      fFramebuffer->newHeight = fHeight;
+      fReady = true;
+   }
+
+   ~HaikuSoftwareRenderer() override
+   {
+      if (fCurrent)
+         MakeNotCurrent();
+
+      if (fContext != nullptr) {
+         hgl_destroy_context(fContext);
+         fContext = nullptr;
+      }
+      if (fFramebuffer != nullptr) {
+         hgl_destroy_st_framebuffer(fFramebuffer);
+         fFramebuffer = nullptr;
+      }
+      if (fDisplay != nullptr) {
+         hgl_destroy_display(fDisplay);
+         fDisplay = nullptr;
+      }
+      if (fScreen != nullptr) {
+         fScreen->destroy(fScreen);
+         fScreen = nullptr;
+      }
+      if (fMutexInitialized) {
+         mtx_destroy(&fMutex);
+         fMutexInitialized = false;
+      }
+   }
+
+   bool IsReady() const { return fReady; }
+
+   void LockGL() override
+   {
+      BGLRenderer::LockGL();
+      if (!fReady || !fMutexInitialized)
+         return;
+
+      mtx_lock(&fMutex);
+      GetSize(fWidth, fHeight);
+      mtx_lock(&fFramebuffer->mutex);
+      fFramebuffer->newWidth = fWidth;
+      fFramebuffer->newHeight = fHeight;
+      mtx_unlock(&fFramebuffer->mutex);
+
+      if (st_api_make_current(fContext->st, &fFramebuffer->base,
+                              &fFramebuffer->base)) {
+         GLDispatcher()->SetTable(fContext->st->ctx->Dispatch.Current);
+         fCurrent = true;
+      } else {
+         GLDispatcher()->SetTable(nullptr);
+         mtx_unlock(&fMutex);
+      }
+   }
+
+   void UnlockGL() override
+   {
+      if (fReady && fCurrent) {
+         if ((Options() & HGL_DOUBLE) == 0)
+            PresentFrontBuffer();
+         MakeNotCurrent();
+         mtx_unlock(&fMutex);
+      }
+      BGLRenderer::UnlockGL();
+   }
+
+   void SwapBuffers(bool vsync = false) override
+   {
+      (void)vsync; /* BitmapHook exposes no vblank primitive. */
+      if (!fReady || !fCurrent)
+         return;
+
+      struct pipe_resource *back = nullptr;
+      mtx_lock(&fFramebuffer->mutex);
+      pipe_resource_reference(&back,
+         fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT]);
+      mtx_unlock(&fFramebuffer->mutex);
+
+      if (back == nullptr)
+         return;
+
+      fContext->st->pipe->flush_resource(fContext->st->pipe, back);
+      fScreen->flush_frontbuffer(fScreen, fContext->st->pipe, back,
+                                 0, 0, this, 1, nullptr);
+
+      mtx_lock(&fFramebuffer->mutex);
+      if (fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT] == back) {
+         std::swap(fFramebuffer->textures[ST_ATTACHMENT_FRONT_LEFT],
+                   fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT]);
+         p_atomic_inc(&fFramebuffer->base.stamp);
+      }
+      mtx_unlock(&fFramebuffer->mutex);
+
+      pipe_resource_reference(&back, nullptr);
+      st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
+   }
+
+   void Draw(BRect updateRect) override
+   {
+      (void)updateRect;
+      BBitmap *bitmap;
+      mtx_lock(&fBitmapMutex);
+      bitmap = fBitmap;
+      if (bitmap != nullptr)
+         GLView()->DrawBitmap(bitmap, B_ORIGIN);
+      mtx_unlock(&fBitmapMutex);
+   }
+
+   void FrameResized(float width, float height) override
+   {
+      if (!fReady)
+         return;
+
+      const unsigned newWidth = width >= 0 ? (unsigned)width + 1 : 0;
+      const unsigned newHeight = height >= 0 ? (unsigned)height + 1 : 0;
+
+      mtx_lock(&fFramebuffer->mutex);
+      fFramebuffer->newWidth = newWidth;
+      fFramebuffer->newHeight = newHeight;
+      p_atomic_inc(&fFramebuffer->base.stamp);
+      mtx_unlock(&fFramebuffer->mutex);
+   }
+
+   void DirectConnected(direct_buffer_info *info) override
+   {
+      (void)info;
+      /* Direct mode is intentionally not enabled by this adapter. */
+   }
+
+   void EnableDirectMode(bool enabled) override
+   {
+      (void)enabled;
+      /* BGLView bitmap presentation remains the only supported path. */
+   }
+
+   status_t CopyPixelsOut(BPoint source, BBitmap *dest) override
+   {
+      (void)source;
+      (void)dest;
+      return B_NOT_SUPPORTED;
+   }
+
+   status_t CopyPixelsIn(BBitmap *source, BPoint dest) override
+   {
+      (void)source;
+      (void)dest;
+      return B_NOT_SUPPORTED;
+   }
+
+   void GetSize(uint32_t &width, uint32_t &height) override
+   {
+      BRect bounds = GLView()->Bounds();
+      width = bounds.IsValid() ? (uint32_t)bounds.IntegerWidth() + 1 : 0;
+      height = bounds.IsValid() ? (uint32_t)bounds.IntegerHeight() + 1 : 0;
+   }
+
+   BBitmap *SetBitmap(BBitmap *bitmap) override
+   {
+      BBitmap *previous;
+      mtx_lock(&fBitmapMutex);
+      previous = fBitmap;
+      fBitmap = bitmap;
+      mtx_unlock(&fBitmapMutex);
+      return previous;
+   }
+
+private:
+   void MakeNotCurrent()
+   {
+      st_api_make_current(nullptr, nullptr, nullptr);
+      GLDispatcher()->SetTable(nullptr);
+      fCurrent = false;
+   }
+
+   void PresentFrontBuffer()
+   {
+      struct pipe_resource *front = nullptr;
+      mtx_lock(&fFramebuffer->mutex);
+      pipe_resource_reference(&front,
+         fFramebuffer->textures[ST_ATTACHMENT_FRONT_LEFT]);
+      mtx_unlock(&fFramebuffer->mutex);
+
+      if (front != nullptr) {
+         fScreen->flush_frontbuffer(fScreen, fContext->st->pipe, front,
+                                    0, 0, this, 0, nullptr);
+         pipe_resource_reference(&front, nullptr);
+      }
+   }
+
+   struct sw_winsys *fWinsys;
+   struct pipe_screen *fScreen;
+   struct hgl_display *fDisplay;
+   struct hgl_buffer *fFramebuffer;
+   struct hgl_context *fContext;
+   struct st_visual fVisual;
+   BBitmap *fBitmap;
+   mtx_t fMutex;
+   mtx_t fBitmapMutex = {};
+   bool fMutexInitialized;
+   bool fReady;
+   bool fCurrent;
+   uint32_t fWidth;
+   uint32_t fHeight;
+};
+
+extern "C" _EXPORT BGLRenderer *
+instantiate_gl_renderer(BGLView *view, ulong options,
+                        BGLDispatcher *dispatcher)
+{
+   HaikuSoftwareRenderer *renderer =
+      new (std::nothrow) HaikuSoftwareRenderer(view, options, dispatcher);
+   if (renderer == nullptr)
+      return nullptr;
+
+   if (!renderer->IsReady()) {
+      delete renderer;
+      return nullptr;
+   }
+   return renderer;
+}
