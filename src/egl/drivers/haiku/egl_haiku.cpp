@@ -633,6 +633,15 @@ haiku_make_current(struct _egl_display *disp, struct _egl_surface *dsurf,
       _eglError(EGL_BAD_MATCH, "Haiku: surface belongs to another display");
       return EGL_FALSE;
    }
+   if (ctx != NULL && (hgl_ctx == NULL || hgl_ctx->ctx == NULL)) {
+      _eglError(EGL_BAD_CONTEXT, "Haiku: invalid context");
+      return EGL_FALSE;
+   }
+   if ((dsurf != NULL && (hgl_dsurf == NULL || hgl_dsurf->fb == NULL))
+       || (rsurf != NULL && (hgl_rsurf == NULL || hgl_rsurf->fb == NULL))) {
+      _eglError(EGL_BAD_SURFACE, "Haiku: invalid surface");
+      return EGL_FALSE;
+   }
 
    if (!_eglBindContext(ctx, dsurf, rsurf, &old_ctx, &old_dsurf, &old_rsurf))
       return EGL_FALSE;
@@ -647,21 +656,6 @@ haiku_make_current(struct _egl_display *disp, struct _egl_surface *dsurf,
    if (ctx == NULL) {
       st_api_make_current(NULL, NULL, NULL);
    } else {
-      if (hgl_ctx == NULL || hgl_ctx->ctx == NULL) {
-         _eglError(EGL_BAD_CONTEXT, "Haiku: invalid context");
-         return EGL_FALSE;
-      }
-
-      if (dsurf != NULL && hgl_dsurf == NULL) {
-         _eglError(EGL_BAD_SURFACE, "Haiku: invalid draw surface");
-         return EGL_FALSE;
-      }
-
-      if (rsurf != NULL && hgl_rsurf == NULL) {
-         _eglError(EGL_BAD_SURFACE, "Haiku: invalid read surface");
-         return EGL_FALSE;
-      }
-
       if (hgl_dsurf != NULL && dsurf != old_dsurf)
          update_size(hgl_dsurf->fb);
 
