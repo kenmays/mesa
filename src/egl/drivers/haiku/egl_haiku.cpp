@@ -107,7 +107,8 @@ haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
                             void *native_window, const EGLint *attrib_list)
 {
    if (native_window == NULL)
-      return NULL;
+      return _eglError(EGL_BAD_NATIVE_WINDOW,
+                       "Haiku: native window is NULL"), NULL;
 
    printf("haiku_create_window_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
@@ -509,15 +510,6 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
    disp->ClientAPIs = 0;
    if (_eglIsApiValid(EGL_OPENGL_API))
       disp->ClientAPIs |= EGL_OPENGL_BIT;
-
-   if (_eglGetArraySize(disp->Configs) == 0) {
-      hgl_destroy_display(hgl_dpy->disp);
-      hgl_dpy->disp = NULL;
-      screen->destroy(screen);
-      free(hgl_dpy);
-      return _eglError(EGL_NOT_INITIALIZED,
-                       "Haiku: no supported EGL framebuffer configs");
-   }
 
    hgl_dpy->ref_count = 1;
    disp->DriverDisplay = (void *)hgl_dpy;
