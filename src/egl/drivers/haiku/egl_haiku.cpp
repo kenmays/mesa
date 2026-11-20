@@ -65,7 +65,17 @@ extern "C" {
 #endif
 #define ERROR(x...) printf("egl_haiku: " x)
 
-_EGL_DRIVER_STANDARD_TYPECASTS(haiku_egl)
+static unsigned
+haiku_visual_options(const struct _egl_config *conf, bool double_buffer)
+{
+   unsigned options = double_buffer ? HGL_DOUBLE : HGL_SINGLE;
+   if (conf != NULL) {
+      if (conf->AlphaSize > 0) options |= HGL_ALPHA;
+      if (conf->DepthSize > 0) options |= HGL_DEPTH;
+      if (conf->StencilSize > 0) options |= HGL_STENCIL;
+   }
+   return options;
+}
 
 struct haiku_egl_display {
    int ref_count;
@@ -94,8 +104,13 @@ static struct _egl_surface *
 haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
                             void *native_window, const EGLint *attrib_list)
 {
+   if (native_window == NULL)
+      return NULL;
+
    printf("haiku_create_window_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
+   if (hgl_dpy == NULL || hgl_dpy->disp == NULL)
+      return NULL;
 
    struct haiku_egl_surface *wgl_surf =
       (struct haiku_egl_surface *)calloc(1, sizeof(*wgl_surf));
@@ -109,7 +124,7 @@ haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
    }
 
    struct st_visual visual;
-   hgl_get_st_visual(&visual, HGL_DOUBLE | HGL_DEPTH);
+   hgl_get_st_visual(&visual, haiku_visual_options(conf, true));
 
    wgl_surf->fb =
       hgl_create_st_framebuffer(hgl_dpy->disp, &visual, native_window);
@@ -138,6 +153,8 @@ haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf
 {
    printf("haiku_create_pbuffer_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
+   if (hgl_dpy == NULL || hgl_dpy->disp == NULL)
+      return NULL;
 
    struct haiku_egl_surface *wgl_surf =
       (struct haiku_egl_surface *)calloc(1, sizeof(*wgl_surf));
@@ -151,7 +168,7 @@ haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf
    }
 
    struct st_visual visual;
-   hgl_get_st_visual(&visual, HGL_DOUBLE | HGL_DEPTH);
+   hgl_get_st_visual(&visual, haiku_visual_options(conf, false));
 
    wgl_surf->fb = hgl_create_st_framebuffer(hgl_dpy->disp, &visual, NULL);
    if (!wgl_surf->fb) {
@@ -191,12 +208,20 @@ static void
 update_size(struct hgl_buffer *buffer)
 {
    uint32_t newWidth, newHeight;
+
+   if (buffer == NULL || buffer->winsysContext == NULL
+       || !buffer->mutex_initialized)
+      return;
+
    ((BitmapHook *)buffer->winsysContext)->GetSize(newWidth, newHeight);
+
+   mtx_lock(&buffer->mutex);
    if (buffer->newWidth != newWidth || buffer->newHeight != newHeight) {
       buffer->newWidth = newWidth;
       buffer->newHeight = newHeight;
       p_atomic_inc(&buffer->base.stamp);
    }
+   mtx_unlock(&buffer->mutex);
 }
 
 static EGLBoolean
@@ -212,6 +237,9 @@ haiku_swap_buffers(struct _egl_display *disp, struct _egl_surface *surf)
    struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
 
    struct hgl_buffer *buffer = hgl_surf->fb;
+   if (buffer->winsysContext == NULL)
+      return EGL_TRUE;
+
    auto &frontBuffer = buffer->textures[ST_ATTACHMENT_FRONT_LEFT];
    auto &backBuffer = buffer->textures[ST_ATTACHMENT_BACK_LEFT];
 
@@ -274,20 +302,20 @@ haiku_add_configs_for_visuals(struct _egl_display *disp)
    conf->base.ConfigID = 1;
    conf->base.BindToTextureRGB = EGL_FALSE;
    conf->base.BindToTextureRGBA = EGL_FALSE;
-   conf->base.StencilSize = 0;
+   conf->base.StencilSize = 8;
    conf->base.TransparentType = EGL_NONE;
    conf->base.NativeRenderable = EGL_TRUE; // Let's say yes
    conf->base.NativeVisualID = 0;          // No visual
    conf->base.NativeVisualType = EGL_NONE; // No visual
-   conf->base.RenderableType = 0x8;
+   conf->base.RenderableType = EGL_OPENGL_BIT;
    conf->base.SampleBuffers = 0; // TODO: How to get the right value ?
    conf->base.Samples = conf->base.SampleBuffers == 0 ? 0 : 0;
-   conf->base.DepthSize = 24; // TODO: How to get the right value ?
+   conf->base.DepthSize = 24;
    conf->base.Level = 0;
    conf->base.MaxPbufferWidth = _EGL_MAX_PBUFFER_WIDTH;
    conf->base.MaxPbufferHeight = _EGL_MAX_PBUFFER_HEIGHT;
    conf->base.MaxPbufferPixels = 0; // TODO: How to get the right value ?
-   conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PIXMAP_BIT | EGL_PBUFFER_BIT;
+   conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
 
    TRACE("Config configuated\n");
    if (!_eglValidateConfig(&conf->base, EGL_FALSE)) {
@@ -350,30 +378,21 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
    disp->ClientAPIs = 0;
    if (_eglIsApiValid(EGL_OPENGL_API))
       disp->ClientAPIs |= EGL_OPENGL_BIT;
-   if (_eglIsApiValid(EGL_OPENGL_ES_API))
-      disp->ClientAPIs |=
-         EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR;
 
-   disp->Extensions.KHR_no_config_context = EGL_TRUE;
-   disp->Extensions.KHR_surfaceless_context = EGL_TRUE;
-   disp->Extensions.MESA_query_driver = EGL_TRUE;
-
-   /* Report back to EGL the bitmask of priorities supported */
-   disp->Extensions.IMG_context_priority =
-      hgl_dpy->disp->fscreen->screen->caps.context_priority_mask;
-   disp->Extensions.NV_context_priority_realtime =
-      disp->Extensions.IMG_context_priority &
-      (1 << __EGL_CONTEXT_PRIORITY_REALTIME_BIT);
-
-   disp->Extensions.EXT_pixel_format_float = EGL_TRUE;
-
-   if (hgl_dpy->disp->fscreen->screen->is_format_supported(
-          hgl_dpy->disp->fscreen->screen, PIPE_FORMAT_B8G8R8A8_SRGB,
-          PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_RENDER_TARGET))
-      disp->Extensions.KHR_gl_colorspace = EGL_TRUE;
-
-   disp->Extensions.KHR_create_context = EGL_TRUE;
-   disp->Extensions.KHR_reusable_sync = EGL_TRUE;
+   /* Optional EGL extensions and GLES remain disabled until implemented. */
+   if (!hgl_dpy->disp->fscreen->screen->is_format_supported(
+          hgl_dpy->disp->fscreen->screen, PIPE_FORMAT_BGRA8888_UNORM,
+          PIPE_TEXTURE_2D, 0, 0,
+          PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET)
+       || !hgl_dpy->disp->fscreen->screen->is_format_supported(
+          hgl_dpy->disp->fscreen->screen, PIPE_FORMAT_Z24_UNORM_S8_UINT,
+          PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_DEPTH_STENCIL)) {
+      hgl_destroy_display(hgl_dpy->disp);
+      hgl_dpy->disp = NULL;
+      free(hgl_dpy);
+      return _eglError(EGL_NOT_INITIALIZED,
+                       "Haiku: required framebuffer formats unavailable");
+   }
 
    haiku_add_configs_for_visuals(disp);
 
