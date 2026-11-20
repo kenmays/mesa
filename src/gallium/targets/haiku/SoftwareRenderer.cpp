@@ -41,7 +41,7 @@ public:
           || (options & (HGL_INDEX | HGL_ACCUM | HGL_OVERLAY
               | HGL_UNDERLAY | HGL_SHARE_CONTEXT)) != 0)
          return;
-      if (mtx_init(&fMutex, mtx_plain) != thrd_success)
+      if (mtx_init(&fMutex, mtx_recursive) != thrd_success)
          return;
       if (mtx_init(&fBitmapMutex, mtx_plain) != thrd_success) {
          mtx_destroy(&fMutex);
@@ -84,8 +84,13 @@ public:
 
    ~HaikuSoftwareRenderer() override
    {
-      if (fCurrent) {
-         MakeNotCurrent();
+      if (fMutexInitialized) {
+         mtx_lock(&fMutex);
+         if (fCurrent) {
+            MakeNotCurrent();
+            /* Release the LockGL() acquisition as well as this one. */
+            mtx_unlock(&fMutex);
+         }
          mtx_unlock(&fMutex);
       }
 
@@ -156,11 +161,11 @@ public:
       if (!fReady)
          return;
 
-      /* BGLView::SwapBuffers may be called after UnlockGL(). */
-      const bool lockHere = !fCurrent;
-      if (lockHere)
-         mtx_lock(&fMutex);
-
+      /*
+       * The recursive mutex permits SwapBuffers both inside and outside
+       * LockGL(), while serializing it against resize, context use and teardown.
+       */
+      mtx_lock(&fMutex);
       st_context_flush(fContext->st, 0, nullptr, nullptr, nullptr);
 
       struct pipe_resource *back = nullptr;
@@ -186,8 +191,7 @@ public:
          st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
       }
 
-      if (lockHere)
-         mtx_unlock(&fMutex);
+      mtx_unlock(&fMutex);
    }
 
    void Draw(BRect updateRect) override
