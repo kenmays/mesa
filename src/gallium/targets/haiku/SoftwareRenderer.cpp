@@ -29,9 +29,8 @@ extern "C" {
 
 class HaikuSoftwareRenderer final : public BGLRenderer, public BitmapHook {
 public:
-   HaikuSoftwareRenderer(BGLView *view, ulong options,
-                         BGLDispatcher *dispatcher)
-      : BGLRenderer(view, options, dispatcher),
+   HaikuSoftwareRenderer(BGLView *view, ulong options)
+      : BGLRenderer(view, options),
         fScreen(nullptr), fDisplay(nullptr),
         fFramebuffer(nullptr), fContext(nullptr), fBitmap(nullptr),
         fMutexInitialized(false), fReady(false), fCurrent(false),
@@ -39,7 +38,7 @@ public:
         fPresentQueued(false), fStopPresentThread(false),
         fWidth(0), fHeight(0)
    {
-      if (view == nullptr || dispatcher == nullptr
+      if (view == nullptr
           || (options & (HGL_INDEX | HGL_ACCUM | HGL_OVERLAY
               | HGL_UNDERLAY | HGL_SHARE_CONTEXT)) != 0)
          return;
@@ -404,11 +403,10 @@ private:
 };
 
 extern "C" _EXPORT BGLRenderer *
-instantiate_gl_renderer(BGLView *view, ulong options,
-                        BGLDispatcher *dispatcher)
+instantiate_gl_renderer(BGLView *view, ulong options)
 {
    HaikuSoftwareRenderer *renderer =
-      new (std::nothrow) HaikuSoftwareRenderer(view, options, dispatcher);
+      new (std::nothrow) HaikuSoftwareRenderer(view, options);
    if (renderer == nullptr)
       return nullptr;
 
