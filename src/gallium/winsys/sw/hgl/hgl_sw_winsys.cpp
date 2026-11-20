@@ -11,6 +11,10 @@
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
  *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial portions
+ * of the Software.
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
@@ -19,12 +23,12 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * The above copyright notice and this permission notice (including the
- * next paragraph) shall be included in all copies or substantial portions
- * of the Software.
- *
  **************************************************************************/
 
+#include <limits.h>
+#include <new>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #include "util/compiler.h"
@@ -54,195 +58,277 @@
 
 struct haiku_displaytarget
 {
-	enum pipe_format format;
-	color_space colorSpace;
+    enum pipe_format format;
+    color_space colorSpace;
 
-	unsigned width;
-	unsigned height;
-	unsigned stride;
+    unsigned width;
+    unsigned height;
+    unsigned stride;
+    size_t size;
 
-	unsigned size;
-
-	void* data;
-	BBitmap* bitmap;
+    void *data;
+    BBitmap *bitmap;
 };
 
 
 // Cast
-static inline struct haiku_displaytarget*
-hgl_sw_displaytarget(struct sw_displaytarget* target)
+static inline struct haiku_displaytarget *
+hgl_sw_displaytarget(struct sw_displaytarget *target)
 {
-	return (struct haiku_displaytarget *)target;
+    return (struct haiku_displaytarget *)target;
 }
 
 
 static void
-hgl_winsys_destroy(struct sw_winsys* winsys)
+hgl_winsys_destroy(struct sw_winsys *winsys)
 {
-	FREE(winsys);
+    FREE(winsys);
 }
 
 
 static bool
-hgl_winsys_is_displaytarget_format_supported(struct sw_winsys* winsys,
-	unsigned textureUsage, enum pipe_format format)
+hgl_winsys_convert_cs(enum pipe_format format, color_space *space)
 {
-	// TODO STUB
-	return true;
-}
+    if (space == NULL)
+        return false;
 
-static color_space
-hgl_winsys_convert_cs(enum pipe_format format)
-{
-	// TODO: B_RGB24, B_RGB16, B_RGB15?
-	switch(format) {
-		case PIPE_FORMAT_B5G6R5_UNORM:
-			return B_CMAP8;
-		case PIPE_FORMAT_A8B8G8R8_UNORM:
-		case PIPE_FORMAT_X8B8G8R8_UNORM:
-		default:
-			return B_RGB32;
-	}
-}
-
-static struct sw_displaytarget*
-hgl_winsys_displaytarget_create(struct sw_winsys* winsys,
-	unsigned textureUsage, enum pipe_format format, unsigned width,
-	unsigned height, unsigned alignment, const void *front_private,
-	unsigned* stride)
-{
-	struct haiku_displaytarget* haikuDisplayTarget
-		= CALLOC_STRUCT(haiku_displaytarget);
-	assert(haikuDisplayTarget);
-
-	TRACE("%s: %d x %d\n", __func__, width, height);
-
-	haikuDisplayTarget->colorSpace = hgl_winsys_convert_cs(format);
-	haikuDisplayTarget->format = format;
-	haikuDisplayTarget->width = width;
-	haikuDisplayTarget->height = height;
-
-	size_t formatStride = util_format_get_stride(format, width);
-	unsigned blockSize = util_format_get_nblocksy(format, height);
-
-	haikuDisplayTarget->stride = align(formatStride, alignment);
-	haikuDisplayTarget->size = haikuDisplayTarget->stride * blockSize;
-
-	if (textureUsage & PIPE_BIND_DISPLAY_TARGET) {
-		haikuDisplayTarget->data = NULL;
-		haikuDisplayTarget->bitmap = new BBitmap(
-			BRect(0, 0, width - 1, height - 1),
-			0,
-			haikuDisplayTarget->colorSpace,
-			haikuDisplayTarget->stride);
-	} else {
-		haikuDisplayTarget->data
-			= align_malloc(haikuDisplayTarget->size, alignment);
-
-		haikuDisplayTarget->bitmap = NULL;
-	}
-
-	*stride = haikuDisplayTarget->stride;
-
-	// Cast to ghost sw_displaytarget type
-	return (struct sw_displaytarget*)haikuDisplayTarget;
-}
-
-
-static void
-hgl_winsys_displaytarget_destroy(struct sw_winsys* winsys,
-	struct sw_displaytarget* displayTarget)
-{
-	struct haiku_displaytarget* haikuDisplayTarget
-		= hgl_sw_displaytarget(displayTarget);
-
-	if (!haikuDisplayTarget)
-		return;
-
-	if (haikuDisplayTarget->data != NULL)
-		align_free(haikuDisplayTarget->data);
-
-	if (haikuDisplayTarget->bitmap != NULL)
-		delete haikuDisplayTarget->bitmap;
-
-	FREE(haikuDisplayTarget);
-}
-
-
-static struct sw_displaytarget*
-hgl_winsys_displaytarget_from_handle(struct sw_winsys* winsys,
-	const struct pipe_resource* templat, struct winsys_handle* whandle,
-	unsigned* stride)
-{
-	return NULL;
+    switch (format) {
+    case PIPE_FORMAT_B5G6R5_UNORM:
+        *space = B_RGB16;
+        return true;
+    case PIPE_FORMAT_BGRA8888_UNORM:
+        *space = B_RGBA32;
+        return true;
+    case PIPE_FORMAT_BGRX8888_UNORM:
+        *space = B_RGB32;
+        return true;
+    default:
+        *space = B_NO_COLOR_SPACE;
+        return false;
+    }
 }
 
 
 static bool
-hgl_winsys_displaytarget_get_handle(struct sw_winsys* winsys,
-	struct sw_displaytarget* displayTarget, struct winsys_handle* whandle)
+hgl_winsys_is_displaytarget_format_supported(struct sw_winsys *winsys,
+    unsigned textureUsage, enum pipe_format format)
 {
-	return false;
+    color_space space;
+
+    if (!(textureUsage & PIPE_BIND_DISPLAY_TARGET))
+        return true;
+
+    return hgl_winsys_convert_cs(format, &space);
 }
 
 
-static void*
-hgl_winsys_displaytarget_map(struct sw_winsys* winsys,
-	struct sw_displaytarget* displayTarget, unsigned flags)
+static struct sw_displaytarget *
+hgl_winsys_displaytarget_create(struct sw_winsys *winsys,
+    unsigned textureUsage, enum pipe_format format, unsigned width,
+    unsigned height, unsigned alignment, const void *front_private,
+    unsigned *stride)
 {
-	struct haiku_displaytarget* haikuDisplayTarget
-		= hgl_sw_displaytarget(displayTarget);
+    struct haiku_displaytarget *target;
+    size_t formatStride;
+    size_t blockRows;
+    size_t alignedStride;
+    size_t allocationSize;
+    color_space space = B_NO_COLOR_SPACE;
+    bool nativeBitmap;
 
-	if (haikuDisplayTarget->bitmap != NULL)
-		return haikuDisplayTarget->bitmap->Bits();
+    CALLED();
 
-	return haikuDisplayTarget->data;
+    if (stride == NULL || width == 0 || height == 0)
+        return NULL;
+
+    if (alignment == 0)
+        alignment = 1;
+
+    if ((alignment & (alignment - 1)) != 0)
+        return NULL;
+
+    nativeBitmap = (textureUsage & PIPE_BIND_DISPLAY_TARGET) != 0;
+    if (nativeBitmap && !hgl_winsys_convert_cs(format, &space))
+        return NULL;
+
+    formatStride = util_format_get_stride(format, width);
+    blockRows = util_format_get_nblocksy(format, height);
+    if (formatStride == 0 || blockRows == 0)
+        return NULL;
+
+    if (formatStride > SIZE_MAX - (alignment - 1))
+        return NULL;
+
+    alignedStride = (formatStride + alignment - 1)
+        & ~((size_t)alignment - 1);
+
+    if (alignedStride == 0 || alignedStride > UINT_MAX)
+        return NULL;
+
+    if (blockRows > SIZE_MAX / alignedStride)
+        return NULL;
+
+    allocationSize = alignedStride * blockRows;
+    if (allocationSize == 0 || allocationSize > UINT_MAX)
+        return NULL;
+
+    if (nativeBitmap && alignedStride > INT32_MAX)
+        return NULL;
+
+    target = CALLOC_STRUCT(haiku_displaytarget);
+    if (target == NULL)
+        return NULL;
+
+    target->format = format;
+    target->colorSpace = space;
+    target->width = width;
+    target->height = height;
+    target->stride = (unsigned)alignedStride;
+    target->size = allocationSize;
+    target->data = NULL;
+    target->bitmap = NULL;
+
+    TRACE("%s: %u x %u, format %u, stride %u\n",
+        __func__, width, height, (unsigned)format, target->stride);
+
+    if (nativeBitmap) {
+        target->bitmap = new (std::nothrow) BBitmap(
+            BRect(0, 0, width - 1, height - 1),
+            0,
+            space,
+            (uint32)alignedStride);
+
+        if (target->bitmap == NULL || !target->bitmap->IsValid()
+            || target->bitmap->Bits() == NULL) {
+            delete target->bitmap;
+            FREE(target);
+            return NULL;
+        }
+
+        const int32 actualStride = target->bitmap->BytesPerRow();
+        const int32 bitsLength = target->bitmap->BitsLength();
+
+        if (actualStride <= 0 || (size_t)actualStride < formatStride
+            || bitsLength <= 0
+            || blockRows > SIZE_MAX / (size_t)actualStride
+            || (size_t)bitsLength < (size_t)actualStride * blockRows) {
+            delete target->bitmap;
+            FREE(target);
+            return NULL;
+        }
+
+        target->stride = (unsigned)actualStride;
+        target->size = (size_t)actualStride * blockRows;
+    } else {
+        target->data = align_malloc(target->size, alignment);
+        if (target->data == NULL) {
+            FREE(target);
+            return NULL;
+        }
+    }
+
+    *stride = target->stride;
+    return (struct sw_displaytarget *)target;
 }
 
 
 static void
-hgl_winsys_displaytarget_unmap(struct sw_winsys* winsys,
-	struct sw_displaytarget* displayTarget)
+hgl_winsys_displaytarget_destroy(struct sw_winsys *winsys,
+    struct sw_displaytarget *displayTarget)
 {
-	return;
+    struct haiku_displaytarget *target;
+
+    if (displayTarget == NULL)
+        return;
+
+    target = hgl_sw_displaytarget(displayTarget);
+    if (target->data != NULL)
+        align_free(target->data);
+
+    delete target->bitmap;
+    FREE(target);
+}
+
+
+static struct sw_displaytarget *
+hgl_winsys_displaytarget_from_handle(struct sw_winsys *winsys,
+    const struct pipe_resource *templat, struct winsys_handle *whandle,
+    unsigned *stride)
+{
+    return NULL;
+}
+
+
+static bool
+hgl_winsys_displaytarget_get_handle(struct sw_winsys *winsys,
+    struct sw_displaytarget *displayTarget, struct winsys_handle *whandle)
+{
+    return false;
+}
+
+
+static void *
+hgl_winsys_displaytarget_map(struct sw_winsys *winsys,
+    struct sw_displaytarget *displayTarget, unsigned flags)
+{
+    struct haiku_displaytarget *target;
+
+    if (displayTarget == NULL)
+        return NULL;
+
+    target = hgl_sw_displaytarget(displayTarget);
+    if (target->bitmap != NULL)
+        return target->bitmap->Bits();
+
+    return target->data;
 }
 
 
 static void
-hgl_winsys_displaytarget_display(struct sw_winsys* winsys,
-	struct sw_displaytarget* displayTarget, void* contextPrivate,
-   unsigned nboxes,
-   struct pipe_box *box)
+hgl_winsys_displaytarget_unmap(struct sw_winsys *winsys,
+    struct sw_displaytarget *displayTarget)
 {
-	assert(contextPrivate);
-
-	struct haiku_displaytarget* haikuDisplayTarget
-		= hgl_sw_displaytarget(displayTarget);
-
-	BitmapHook *context = (BitmapHook*)contextPrivate;
-	context->SetBitmap(haikuDisplayTarget->bitmap);
 }
 
 
-struct sw_winsys*
+static void
+hgl_winsys_displaytarget_display(struct sw_winsys *winsys,
+    struct sw_displaytarget *displayTarget, void *contextPrivate,
+    unsigned nboxes, struct pipe_box *box)
+{
+    struct haiku_displaytarget *target;
+    BitmapHook *context;
+
+    if (displayTarget == NULL || contextPrivate == NULL)
+        return;
+
+    target = hgl_sw_displaytarget(displayTarget);
+    if (target->bitmap == NULL)
+        return;
+
+    context = (BitmapHook *)contextPrivate;
+    context->SetBitmap(target->bitmap);
+}
+
+
+struct sw_winsys *
 hgl_create_sw_winsys()
 {
-	struct sw_winsys* winsys = CALLOC_STRUCT(sw_winsys);
+    struct sw_winsys *winsys = CALLOC_STRUCT(sw_winsys);
 
-	if (!winsys)
-		return NULL;
+    if (winsys == NULL)
+        return NULL;
 
-	// Attach winsys hooks for Haiku
-	winsys->destroy = hgl_winsys_destroy;
-	winsys->is_displaytarget_format_supported
-		= hgl_winsys_is_displaytarget_format_supported;
-	winsys->displaytarget_create = hgl_winsys_displaytarget_create;
-	winsys->displaytarget_from_handle = hgl_winsys_displaytarget_from_handle;
-	winsys->displaytarget_get_handle = hgl_winsys_displaytarget_get_handle;
-	winsys->displaytarget_map = hgl_winsys_displaytarget_map;
-	winsys->displaytarget_unmap = hgl_winsys_displaytarget_unmap;
-	winsys->displaytarget_display = hgl_winsys_displaytarget_display;
-	winsys->displaytarget_destroy = hgl_winsys_displaytarget_destroy;
+    winsys->destroy = hgl_winsys_destroy;
+    winsys->is_displaytarget_format_supported
+        = hgl_winsys_is_displaytarget_format_supported;
+    winsys->displaytarget_create = hgl_winsys_displaytarget_create;
+    winsys->displaytarget_from_handle = hgl_winsys_displaytarget_from_handle;
+    winsys->displaytarget_get_handle = hgl_winsys_displaytarget_get_handle;
+    winsys->displaytarget_map = hgl_winsys_displaytarget_map;
+    winsys->displaytarget_unmap = hgl_winsys_displaytarget_unmap;
+    winsys->displaytarget_display = hgl_winsys_displaytarget_display;
+    winsys->displaytarget_destroy = hgl_winsys_displaytarget_destroy;
 
-	return winsys;
+    return winsys;
 }
