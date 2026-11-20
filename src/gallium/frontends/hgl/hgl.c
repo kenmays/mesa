@@ -367,9 +367,15 @@ hgl_get_st_visual(struct st_visual *visual, ulong options)
     } else {
         visual->color_format = (options & HGL_ALPHA)
             ? PIPE_FORMAT_BGRA8888_UNORM : PIPE_FORMAT_BGRX8888_UNORM;
-        visual->depth_stencil_format =
-            (options & (HGL_DEPTH | HGL_STENCIL))
-            ? PIPE_FORMAT_Z24_UNORM_S8_UINT : PIPE_FORMAT_NONE;
+
+        if (options & HGL_DEPTH) {
+            visual->depth_stencil_format = (options & HGL_STENCIL)
+                ? PIPE_FORMAT_Z24_UNORM_S8_UINT : PIPE_FORMAT_Z24X8_UNORM;
+        } else if (options & HGL_STENCIL) {
+            visual->depth_stencil_format = PIPE_FORMAT_X24S8_UINT;
+        } else {
+            visual->depth_stencil_format = PIPE_FORMAT_NONE;
+        }
     }
 
     /* Accumulation buffers are not allocated by this frontend. */
