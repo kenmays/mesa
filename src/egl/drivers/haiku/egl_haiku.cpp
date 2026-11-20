@@ -229,52 +229,70 @@ haiku_swap_buffers(struct _egl_display *disp, struct _egl_surface *surf)
 {
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
    struct haiku_egl_surface *hgl_surf = haiku_egl_surface(surf);
-   if (hgl_surf->fb == NULL)
-      return EGL_FALSE;
-   if (hgl_surf->fb->winsysContext == NULL)
-      return EGL_TRUE;
-
-   struct haiku_egl_context *hgl_ctx = haiku_egl_context(surf->CurrentContext);
-   if (hgl_ctx == NULL)
-      return EGL_FALSE;
-
-   struct st_context *st = hgl_ctx->ctx->st;
-   struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
-
    struct hgl_buffer *buffer = hgl_surf->fb;
+   struct haiku_egl_context *hgl_ctx;
+   struct pipe_resource *back_buffer = NULL;
+   struct st_context *st;
+   struct pipe_screen *screen;
+   struct pipe_fence_handle *new_fence = NULL;
+
+   if (buffer == NULL)
+      return EGL_FALSE;
+
+   /* eglSwapBuffers on a pbuffer has no native presentation operation. */
    if (buffer->winsysContext == NULL)
       return EGL_TRUE;
 
-   auto &frontBuffer = buffer->textures[ST_ATTACHMENT_FRONT_LEFT];
-   auto &backBuffer = buffer->textures[ST_ATTACHMENT_BACK_LEFT];
+   hgl_ctx = haiku_egl_context(surf->CurrentContext);
+   if (hgl_ctx == NULL)
+      return EGL_FALSE;
 
-   // Inform ST of a flush if double buffering is used
-   if (backBuffer != NULL)
-      st->pipe->flush_resource(st->pipe, backBuffer);
+   st = hgl_ctx->ctx->st;
+   screen = hgl_dpy->disp->fscreen->screen;
 
+   /*
+    * Take a resource reference while holding the drawable lock. Do not hold
+    * this lock while flushing Mesa: the flush path can call back into HGL.
+    */
+   mtx_lock(&buffer->mutex);
+   pipe_resource_reference(&back_buffer,
+      buffer->textures[ST_ATTACHMENT_BACK_LEFT]);
+   mtx_unlock(&buffer->mutex);
+
+   if (back_buffer == NULL)
+      return EGL_TRUE;
+
+   st->pipe->flush_resource(st->pipe, back_buffer);
    _mesa_glthread_finish(st->ctx);
 
-   struct pipe_fence_handle *new_fence = NULL;
    st_context_flush(st, ST_FLUSH_FRONT, &new_fence, NULL, NULL);
-   if (hgl_surf->throttle_fence) {
-      screen->fence_finish(screen, NULL, hgl_surf->throttle_fence,
-                           OS_TIMEOUT_INFINITE);
+
+   if (hgl_surf->throttle_fence != NULL) {
+      if (!screen->fence_finish(screen, NULL, hgl_surf->throttle_fence,
+                                OS_TIMEOUT_INFINITE)) {
+         screen->fence_reference(screen, &new_fence, NULL);
+         pipe_resource_reference(&back_buffer, NULL);
+         return EGL_FALSE;
+      }
       screen->fence_reference(screen, &hgl_surf->throttle_fence, NULL);
    }
    hgl_surf->throttle_fence = new_fence;
 
-   // flush back buffer and swap buffers if double buffering is used
-   if (backBuffer != NULL) {
-      screen->flush_frontbuffer(screen, st->pipe, backBuffer, 0, 0,
-                                buffer->winsysContext, 1, NULL);
-      std::swap(frontBuffer, backBuffer);
+   /* Present the referenced back buffer before changing the drawable pair. */
+   screen->flush_frontbuffer(screen, st->pipe, back_buffer, 0, 0,
+                             buffer->winsysContext, 1, NULL);
+
+   mtx_lock(&buffer->mutex);
+   if (buffer->textures[ST_ATTACHMENT_BACK_LEFT] == back_buffer) {
+      std::swap(buffer->textures[ST_ATTACHMENT_FRONT_LEFT],
+                buffer->textures[ST_ATTACHMENT_BACK_LEFT]);
       p_atomic_inc(&buffer->base.stamp);
    }
+   mtx_unlock(&buffer->mutex);
 
-   // XXX: right front / back if HGL_STEREO?
+   pipe_resource_reference(&back_buffer, NULL);
 
    update_size(buffer);
-
    st_context_invalidate_state(st, ST_INVALIDATE_FB_STATE);
 
    return EGL_TRUE;
