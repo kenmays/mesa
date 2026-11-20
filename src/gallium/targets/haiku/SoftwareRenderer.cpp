@@ -128,9 +128,20 @@ public:
       fFramebuffer->newHeight = fHeight;
       mtx_unlock(&fFramebuffer->mutex);
 
-      st_api_make_current(fContext->st, &fFramebuffer->base,
-                          &fFramebuffer->base);
-      GLDispatcher()->SetTable(fContext->st->ctx->Dispatch.Current);
+      if (!st_api_make_current(fContext->st, &fFramebuffer->base,
+                               &fFramebuffer->base)) {
+         mtx_unlock(&fMutex);
+         return;
+      }
+
+      if (GLDispatcher()->SetTable(fContext->st->ctx->Dispatch.Current)
+          != B_OK) {
+         st_api_make_current(nullptr, nullptr, nullptr);
+         GLDispatcher()->SetTable(nullptr);
+         mtx_unlock(&fMutex);
+         return;
+      }
+
       fCurrent = true;
    }
 
