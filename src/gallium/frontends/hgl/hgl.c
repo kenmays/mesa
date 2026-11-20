@@ -294,8 +294,9 @@ hgl_destroy_st_framebuffer(struct hgl_buffer *buffer)
 
 
 struct hgl_context *
-hgl_create_context(struct hgl_display *display, struct st_visual *visual,
-    struct st_context *shared)
+hgl_create_context_with_attribs(struct hgl_display *display,
+    struct st_visual *visual, struct st_context *shared,
+    const struct hgl_context_attribs *context_attribs)
 {
     struct hgl_context *context;
     struct st_context_attribs attribs;
@@ -313,10 +314,16 @@ hgl_create_context(struct hgl_display *display, struct st_visual *visual,
 
     memset(&attribs, 0, sizeof(attribs));
     attribs.options.force_glsl_extensions_warn = false;
-    attribs.profile = API_OPENGL_COMPAT;
+    attribs.profile = context_attribs != NULL
+        ? (gl_api)context_attribs->profile : API_OPENGL_COMPAT;
     attribs.visual = *visual;
-    attribs.major = 1;
-    attribs.minor = 0;
+    attribs.major = context_attribs != NULL && context_attribs->major != 0
+        ? context_attribs->major : 1;
+    attribs.minor = context_attribs != NULL
+        ? context_attribs->minor : 0;
+    attribs.flags = context_attribs != NULL ? context_attribs->flags : 0;
+    attribs.context_flags = context_attribs != NULL
+        ? context_attribs->context_flags : 0;
 
     context->st = st_api_create_context(display->fscreen, &attribs,
         &result, shared);
@@ -329,6 +336,14 @@ hgl_create_context(struct hgl_display *display, struct st_visual *visual,
     context->st->frontend_context = (void *)context;
 
     return context;
+}
+
+
+struct hgl_context *
+hgl_create_context(struct hgl_display *display, struct st_visual *visual,
+    struct st_context *shared)
+{
+    return hgl_create_context_with_attribs(display, visual, shared, NULL);
 }
 
 
