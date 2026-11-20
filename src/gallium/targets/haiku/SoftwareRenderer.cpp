@@ -14,6 +14,7 @@
 #include <GLDispatcher.h>
 #include <GLView.h>
 #include <Bitmap.h>
+#include <private/opengl/GLDispatcher.h>
 
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
@@ -32,13 +33,14 @@ public:
    HaikuSoftwareRenderer(BGLView *view, ulong options,
                          BGLDispatcher *dispatcher)
       : BGLRenderer(view, options, dispatcher),
-        fWinsys(nullptr), fScreen(nullptr), fDisplay(nullptr),
+        fScreen(nullptr), fDisplay(nullptr),
         fFramebuffer(nullptr), fContext(nullptr), fBitmap(nullptr),
         fMutexInitialized(false), fReady(false), fCurrent(false),
         fWidth(0), fHeight(0)
    {
-      if (view == nullptr || (options & (HGL_ACCUM | HGL_OVERLAY
-          | HGL_UNDERLAY | HGL_SHARE_CONTEXT)) != 0)
+      if (view == nullptr || dispatcher == nullptr
+          || (options & (HGL_ACCUM | HGL_OVERLAY
+              | HGL_UNDERLAY | HGL_SHARE_CONTEXT)) != 0)
          return;
       if (mtx_init(&fMutex, mtx_plain) != thrd_success)
          return;
@@ -48,18 +50,16 @@ public:
       }
       fMutexInitialized = true;
 
-      fWinsys = hgl_create_sw_winsys();
-      if (fWinsys == nullptr)
+      struct sw_winsys *winsys = hgl_create_sw_winsys();
+      if (winsys == nullptr)
          return;
 
-      fScreen = sw_screen_create(fWinsys);
+      fScreen = sw_screen_create(winsys);
       if (fScreen == nullptr) {
-         fWinsys->destroy(fWinsys);
-         fWinsys = nullptr;
+         winsys->destroy(winsys);
          return;
       }
       /* sw_screen_create transfers winsys ownership to the screen. */
-      fWinsys = nullptr;
 
       fDisplay = hgl_create_display(fScreen);
       if (fDisplay == nullptr)
@@ -85,8 +85,10 @@ public:
 
    ~HaikuSoftwareRenderer() override
    {
-      if (fCurrent)
+      if (fCurrent) {
          MakeNotCurrent();
+         mtx_unlock(&fMutex);
+      }
 
       if (fContext != nullptr) {
          hgl_destroy_context(fContext);
@@ -216,7 +218,7 @@ public:
    {
       (void)source;
       (void)dest;
-      return B_NOT_SUPPORTED;
+      return B_ERROR;
    }
 
    status_t CopyPixelsIn(BBitmap *source, BPoint dest) override
@@ -266,7 +268,6 @@ private:
       }
    }
 
-   struct sw_winsys *fWinsys;
    struct pipe_screen *fScreen;
    struct hgl_display *fDisplay;
    struct hgl_buffer *fFramebuffer;
