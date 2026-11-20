@@ -296,10 +296,12 @@ private:
       if (GLView()->LockLooperWithTimeout(1000000) != B_OK)
          return;
 
-      mtx_lock(&fBitmapMutex);
-      if (fBitmap != nullptr)
-         GLView()->DrawBitmap(fBitmap, B_ORIGIN);
-      mtx_unlock(&fBitmapMutex);
+      /*
+       * BView drawing belongs in the view's Draw() callback. Invalidate
+       * schedules that callback on the window looper without drawing from
+       * the GL worker thread or bypassing BGLView's normal draw lifecycle.
+       */
+      GLView()->Invalidate();
 
       GLView()->UnlockLooper();
    }
