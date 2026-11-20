@@ -13,7 +13,7 @@
 #include <GLRenderer.h>
 #include <GLView.h>
 #include <Bitmap.h>
-#include <private/opengl/GLDispatcher.h>
+#include <GLDispatcher.h>
 
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
