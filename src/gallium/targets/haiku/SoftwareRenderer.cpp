@@ -13,7 +13,6 @@
 #include <GLRenderer.h>
 #include <GLView.h>
 #include <Bitmap.h>
-#include <GLDispatcher.h>
 
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
@@ -134,13 +133,7 @@ public:
          return;
       }
 
-      if (GLDispatcher()->SetTable(fContext->st->ctx->Dispatch.Current)
-          != B_OK) {
-         st_api_make_current(nullptr, nullptr, nullptr);
-         GLDispatcher()->SetTable(nullptr);
-         mtx_unlock(&fMutex);
-         return;
-      }
+      /* st_api_make_current binds Mesa's per-thread GL dispatch table. */
 
       fCurrent = true;
    }
