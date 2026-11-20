@@ -134,6 +134,7 @@ public:
 
       if (!st_api_make_current(fContext->st, &fFramebuffer->base,
                                &fFramebuffer->base)) {
+         st_api_make_current(nullptr, nullptr, nullptr);
          mtx_unlock(&fMutex);
          return;
       }
