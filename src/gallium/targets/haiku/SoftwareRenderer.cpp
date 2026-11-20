@@ -49,6 +49,12 @@ public:
       }
       fMutexInitialized = true;
 
+      BRect initialBounds = view->Bounds();
+      if (initialBounds.IsValid()) {
+         fWidth = (uint32_t)initialBounds.IntegerWidth() + 1;
+         fHeight = (uint32_t)initialBounds.IntegerHeight() + 1;
+      }
+
       struct sw_winsys *winsys = hgl_create_sw_winsys();
       if (winsys == nullptr)
          return;
@@ -76,7 +82,6 @@ public:
       if (fContext == nullptr)
          return;
 
-      GetSize(fWidth, fHeight);
       fFramebuffer->newWidth = fWidth;
       fFramebuffer->newHeight = fHeight;
       fReady = true;
@@ -126,7 +131,6 @@ public:
          return;
 
       mtx_lock(&fMutex);
-      GetSize(fWidth, fHeight);
       mtx_lock(&fFramebuffer->mutex);
       fFramebuffer->newWidth = fWidth;
       fFramebuffer->newHeight = fHeight;
@@ -217,11 +221,15 @@ public:
       const unsigned newWidth = width >= 0 ? (unsigned)width + 1 : 0;
       const unsigned newHeight = height >= 0 ? (unsigned)height + 1 : 0;
 
+      mtx_lock(&fMutex);
+      fWidth = newWidth;
+      fHeight = newHeight;
       mtx_lock(&fFramebuffer->mutex);
       fFramebuffer->newWidth = newWidth;
       fFramebuffer->newHeight = newHeight;
       p_atomic_inc(&fFramebuffer->base.stamp);
       mtx_unlock(&fFramebuffer->mutex);
+      mtx_unlock(&fMutex);
    }
 
    void DirectConnected(direct_buffer_info *info) override
@@ -252,9 +260,10 @@ public:
 
    void GetSize(uint32_t &width, uint32_t &height) override
    {
-      BRect bounds = GLView()->Bounds();
-      width = bounds.IsValid() ? (uint32_t)bounds.IntegerWidth() + 1 : 0;
-      height = bounds.IsValid() ? (uint32_t)bounds.IntegerHeight() + 1 : 0;
+      mtx_lock(&fMutex);
+      width = fWidth;
+      height = fHeight;
+      mtx_unlock(&fMutex);
    }
 
    BBitmap *SetBitmap(BBitmap *bitmap) override
