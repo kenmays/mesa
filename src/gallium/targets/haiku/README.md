@@ -19,6 +19,8 @@ OpenGL Kit lifecycle.
 - Single- and double-buffered rendering
 - Depth and stencil attachments where llvmpipe reports format support
 - Bitmap presentation through BGLView's app_server drawing path
+- Deferred invalidation on a presentation worker, avoiding looper/display-lock
+  inversion when the application swaps while holding LockGL()
 - Resize invalidation and framebuffer resource replacement
 
 ## Explicit limitations
