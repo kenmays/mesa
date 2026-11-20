@@ -39,7 +39,7 @@ public:
         fWidth(0), fHeight(0)
    {
       if (view == nullptr || dispatcher == nullptr
-          || (options & (HGL_ACCUM | HGL_OVERLAY
+          || (options & (HGL_INDEX | HGL_ACCUM | HGL_OVERLAY
               | HGL_UNDERLAY | HGL_SHARE_CONTEXT)) != 0)
          return;
       if (mtx_init(&fMutex, mtx_plain) != thrd_success)
@@ -138,7 +138,8 @@ public:
    {
       if (fReady && fCurrent) {
          if ((Options() & HGL_DOUBLE) == 0)
-            PresentFrontBuffer();
+            st_context_flush(fContext->st, ST_FLUSH_FRONT, nullptr, nullptr,
+                             nullptr);
          MakeNotCurrent();
          mtx_unlock(&fMutex);
       }
@@ -148,8 +149,15 @@ public:
    void SwapBuffers(bool vsync = false) override
    {
       (void)vsync; /* BitmapHook exposes no vblank primitive. */
-      if (!fReady || !fCurrent)
+      if (!fReady)
          return;
+
+      /* BGLView::SwapBuffers may be called after UnlockGL(). */
+      const bool lockHere = !fCurrent;
+      if (lockHere)
+         mtx_lock(&fMutex);
+
+      st_context_flush(fContext->st, 0, nullptr, nullptr, nullptr);
 
       struct pipe_resource *back = nullptr;
       mtx_lock(&fFramebuffer->mutex);
@@ -157,23 +165,25 @@ public:
          fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT]);
       mtx_unlock(&fFramebuffer->mutex);
 
-      if (back == nullptr)
-         return;
+      if (back != nullptr) {
+         fContext->st->pipe->flush_resource(fContext->st->pipe, back);
+         fScreen->flush_frontbuffer(fScreen, fContext->st->pipe, back,
+                                    0, 0, this, 1, nullptr);
 
-      fContext->st->pipe->flush_resource(fContext->st->pipe, back);
-      fScreen->flush_frontbuffer(fScreen, fContext->st->pipe, back,
-                                 0, 0, this, 1, nullptr);
+         mtx_lock(&fFramebuffer->mutex);
+         if (fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT] == back) {
+            std::swap(fFramebuffer->textures[ST_ATTACHMENT_FRONT_LEFT],
+                      fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT]);
+            p_atomic_inc(&fFramebuffer->base.stamp);
+         }
+         mtx_unlock(&fFramebuffer->mutex);
 
-      mtx_lock(&fFramebuffer->mutex);
-      if (fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT] == back) {
-         std::swap(fFramebuffer->textures[ST_ATTACHMENT_FRONT_LEFT],
-                   fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT]);
-         p_atomic_inc(&fFramebuffer->base.stamp);
+         pipe_resource_reference(&back, nullptr);
+         st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
       }
-      mtx_unlock(&fFramebuffer->mutex);
 
-      pipe_resource_reference(&back, nullptr);
-      st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
+      if (lockHere)
+         mtx_unlock(&fMutex);
    }
 
    void Draw(BRect updateRect) override
@@ -252,20 +262,6 @@ private:
       fCurrent = false;
    }
 
-   void PresentFrontBuffer()
-   {
-      struct pipe_resource *front = nullptr;
-      mtx_lock(&fFramebuffer->mutex);
-      pipe_resource_reference(&front,
-         fFramebuffer->textures[ST_ATTACHMENT_FRONT_LEFT]);
-      mtx_unlock(&fFramebuffer->mutex);
-
-      if (front != nullptr) {
-         fScreen->flush_frontbuffer(fScreen, fContext->st->pipe, front,
-                                    0, 0, this, 0, nullptr);
-         pipe_resource_reference(&front, nullptr);
-      }
-   }
 
    struct pipe_screen *fScreen;
    struct hgl_display *fDisplay;
