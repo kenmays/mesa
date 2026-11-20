@@ -43,6 +43,7 @@
 
 #include "hgl_sw_winsys.h"
 
+#include <Application.h>
 #include <Bitmap.h>
 #include <OS.h>
 
@@ -148,7 +149,8 @@ hgl_winsys_displaytarget_create(struct sw_winsys *winsys,
         return NULL;
 
     nativeBitmap = (textureUsage & PIPE_BIND_DISPLAY_TARGET) != 0;
-    if (nativeBitmap && !hgl_winsys_convert_cs(format, &space))
+    if (nativeBitmap && (be_app == NULL
+        || !hgl_winsys_convert_cs(format, &space)))
         return NULL;
 
     formatStride = util_format_get_stride(format, width);
