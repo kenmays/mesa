@@ -93,6 +93,9 @@ struct hgl_buffer *hgl_create_st_framebuffer(struct hgl_display *display,
     struct st_visual *visual, void *winsysContext);
 void hgl_destroy_st_framebuffer(struct hgl_buffer *buffer);
 
+/* Detach a native bitmap before its display-target resource is released. */
+void hgl_winsys_detach_native_surface(void *winsysContext);
+
 struct hgl_context *hgl_create_context(struct hgl_display *display,
     struct st_visual *visual, struct st_context *shared);
 struct hgl_context *hgl_create_context_with_attribs(
