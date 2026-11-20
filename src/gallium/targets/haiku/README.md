@@ -4,7 +4,7 @@ This target builds Mesa's legacy Haiku OpenGL Kit renderer add-on:
 
 - Meson target: `libswpipe`
 - Output: `libswpipe.so`
-- Factory: `instantiate_gl_renderer(BGLView*, ulong, BGLDispatcher*)`
+- Factory: `instantiate_gl_renderer(BGLView*, ulong)`
 - Rendering backend: Gallium llvmpipe through the HGL frontend and Haiku software winsys
 
 The add-on is separate from the EGL driver. Both use the same HGL frontend and
