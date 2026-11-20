@@ -688,8 +688,18 @@ _glvnd = get_option('glvnd') \
            error_message: 'glvnd requires DRI based GLX and/or EGL') \
   .require(get_option('egl-lib-suffix') == '',
            error_message: '''EGL lib suffix can't be used with libglvnd''')
-dep_glvnd = dependency('libglvnd', version : '>= 1.3.2', required : _glvnd)
+# Haiku's OpenGL kit is provided by libglvnd's HGL frontend. Mesa is loaded
+# as an EGL vendor, so require the current Haiku-capable libglvnd ABI and its
+# development headers rather than accepting older GLVND packages.
+glvnd_min_version = host_machine.system() == 'haiku' ? '>= 1.7.0' : '>= 1.3.2'
+dep_glvnd = dependency('libglvnd', version : glvnd_min_version, required : _glvnd)
 with_glvnd = dep_glvnd.found()
+
+if with_glvnd and host_machine.system() == 'haiku'
+  if not cc.has_header('glvnd/libeglabi.h', dependencies : dep_glvnd)
+    error('Haiku GLVND builds require libglvnd >= 1.7.0 development headers (glvnd/libeglabi.h). Install libglvnd_devel.')
+  endif
+endif
 pre_args += '-DUSE_LIBGLVND=@0@'.format(with_glvnd.to_int())
 glvnd_vendor_name = get_option('glvnd-vendor-name')
 

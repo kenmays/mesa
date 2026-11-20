@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <algorithm>
 
@@ -43,6 +44,7 @@
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
+#include "frontend/sw_winsys.h"
 #include "state_tracker/st_context.h"
 #include "util/u_atomic.h"
 #include "mesa/glapi/glapi/glapi.h"
@@ -94,8 +96,12 @@ static struct _egl_surface *
 haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
                             void *native_window, const EGLint *attrib_list)
 {
-   printf("haiku_create_window_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
+
+   if (native_window == NULL) {
+      _eglError(EGL_BAD_NATIVE_WINDOW, "haiku_create_window_surface");
+      return NULL;
+   }
 
    struct haiku_egl_surface *wgl_surf =
       (struct haiku_egl_surface *)calloc(1, sizeof(*wgl_surf));
@@ -108,7 +114,7 @@ haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
       return NULL;
    }
 
-   struct st_visual visual;
+   struct st_visual visual = {};
    hgl_get_st_visual(&visual, HGL_DOUBLE | HGL_DEPTH);
 
    wgl_surf->fb =
@@ -128,7 +134,11 @@ static struct _egl_surface *
 haiku_create_pixmap_surface(struct _egl_display *disp, struct _egl_config *conf,
                             void *native_pixmap, const EGLint *attrib_list)
 {
-   printf("haiku_create_pixmap_surface\n");
+   (void)disp;
+   (void)conf;
+   (void)native_pixmap;
+   (void)attrib_list;
+   _eglError(EGL_BAD_MATCH, "Haiku does not support EGL pixmap surfaces");
    return NULL;
 }
 
@@ -136,7 +146,6 @@ static struct _egl_surface *
 haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf,
                              const EGLint *attrib_list)
 {
-   printf("haiku_create_pbuffer_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
 
    struct haiku_egl_surface *wgl_surf =
@@ -150,7 +159,7 @@ haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf
       return NULL;
    }
 
-   struct st_visual visual;
+   struct st_visual visual = {};
    hgl_get_st_visual(&visual, HGL_DOUBLE | HGL_DEPTH);
 
    wgl_surf->fb = hgl_create_st_framebuffer(hgl_dpy->disp, &visual, NULL);
@@ -279,15 +288,16 @@ haiku_add_configs_for_visuals(struct _egl_display *disp)
    conf->base.NativeRenderable = EGL_TRUE; // Let's say yes
    conf->base.NativeVisualID = 0;          // No visual
    conf->base.NativeVisualType = EGL_NONE; // No visual
-   conf->base.RenderableType = 0x8;
+   conf->base.RenderableType = EGL_OPENGL_BIT;
    conf->base.SampleBuffers = 0; // TODO: How to get the right value ?
-   conf->base.Samples = conf->base.SampleBuffers == 0 ? 0 : 0;
+   conf->base.Samples = 0;
    conf->base.DepthSize = 24; // TODO: How to get the right value ?
    conf->base.Level = 0;
    conf->base.MaxPbufferWidth = _EGL_MAX_PBUFFER_WIDTH;
    conf->base.MaxPbufferHeight = _EGL_MAX_PBUFFER_HEIGHT;
-   conf->base.MaxPbufferPixels = 0; // TODO: How to get the right value ?
-   conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PIXMAP_BIT | EGL_PBUFFER_BIT;
+   conf->base.MaxPbufferPixels =
+      _EGL_MAX_PBUFFER_WIDTH * _EGL_MAX_PBUFFER_HEIGHT;
+   conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
 
    TRACE("Config configuated\n");
    if (!_eglValidateConfig(&conf->base, EGL_FALSE)) {
@@ -322,10 +332,13 @@ haiku_display_destroy(struct _egl_display *disp)
    if (!p_atomic_dec_zero(&hgl_dpy->ref_count))
       return;
 
-   struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
-   hgl_destroy_display(hgl_dpy->disp);
-   hgl_dpy->disp = NULL;
-   screen->destroy(screen); // destroy will deallocate object
+   if (hgl_dpy->disp != NULL) {
+      struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
+      hgl_destroy_display(hgl_dpy->disp);
+      hgl_dpy->disp = NULL;
+      if (screen != NULL)
+         screen->destroy(screen);
+   }
 
    free(hgl_dpy);
 }
@@ -333,6 +346,7 @@ haiku_display_destroy(struct _egl_display *disp)
 static EGLBoolean
 haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
 {
+   (void)platformDisplay;
    struct haiku_egl_display *hgl_dpy;
 
    hgl_dpy =
@@ -341,18 +355,33 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
    hgl_dpy->ref_count = 1;
-   disp->DriverDisplay = (void *)hgl_dpy;
 
    struct sw_winsys *winsys = hgl_create_sw_winsys();
-   struct pipe_screen *screen = sw_screen_create(winsys);
-   hgl_dpy->disp = hgl_create_display(screen);
+   if (winsys == NULL) {
+      free(hgl_dpy);
+      return _eglError(EGL_NOT_INITIALIZED, "Haiku software winsys creation failed");
+   }
 
+   struct pipe_screen *screen = sw_screen_create(winsys);
+   if (screen == NULL) {
+      winsys->destroy(winsys);
+      free(hgl_dpy);
+      return _eglError(EGL_NOT_INITIALIZED, "Haiku Gallium screen creation failed");
+   }
+
+   hgl_dpy->disp = hgl_create_display(screen);
+   if (hgl_dpy->disp == NULL) {
+      screen->destroy(screen);
+      free(hgl_dpy);
+      return _eglError(EGL_NOT_INITIALIZED, "Haiku HGL display creation failed");
+   }
+
+   disp->DriverDisplay = hgl_dpy;
+
+   /* HGL currently creates desktop OpenGL compatibility contexts only. */
    disp->ClientAPIs = 0;
    if (_eglIsApiValid(EGL_OPENGL_API))
       disp->ClientAPIs |= EGL_OPENGL_BIT;
-   if (_eglIsApiValid(EGL_OPENGL_ES_API))
-      disp->ClientAPIs |=
-         EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT_KHR;
 
    disp->Extensions.KHR_no_config_context = EGL_TRUE;
    disp->Extensions.KHR_surfaceless_context = EGL_TRUE;
@@ -375,7 +404,15 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
    disp->Extensions.KHR_create_context = EGL_TRUE;
    disp->Extensions.KHR_reusable_sync = EGL_TRUE;
 
-   haiku_add_configs_for_visuals(disp);
+   if (!haiku_add_configs_for_visuals(disp)) {
+      struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
+      hgl_destroy_display(hgl_dpy->disp);
+      hgl_dpy->disp = NULL;
+      screen->destroy(screen);
+      disp->DriverDisplay = NULL;
+      free(hgl_dpy);
+      return EGL_FALSE;
+   }
 
    return EGL_TRUE;
 }
@@ -387,7 +424,7 @@ haiku_initialize(struct _egl_display *disp)
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
 
    if (hgl_dpy) {
-      hgl_dpy->ref_count++;
+      p_atomic_inc(&hgl_dpy->ref_count);
       return EGL_TRUE;
    }
 
@@ -429,7 +466,7 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
 
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
 
-   struct st_visual visual;
+   struct st_visual visual = {};
    hgl_get_st_visual(&visual, HGL_DOUBLE | HGL_DEPTH);
 
    struct haiku_egl_context *context =

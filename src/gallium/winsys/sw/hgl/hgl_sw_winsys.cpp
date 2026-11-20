@@ -214,7 +214,8 @@ hgl_winsys_displaytarget_display(struct sw_winsys* winsys,
    unsigned nboxes,
    struct pipe_box *box)
 {
-	assert(contextPrivate);
+	if (!contextPrivate)
+		return;
 
 	struct haiku_displaytarget* haikuDisplayTarget
 		= hgl_sw_displaytarget(displayTarget);
