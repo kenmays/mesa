@@ -305,67 +305,137 @@ haiku_swap_buffers(struct _egl_display *disp, struct _egl_surface *surf)
    return EGL_TRUE;
 }
 
-// #pragma mark EGLDisplay
+static EGLBoolean
+haiku_query_surface(struct _egl_display *disp, struct _egl_surface *surf,
+                    EGLint attribute, EGLint *value)
+{
+   return _eglQuerySurface(disp, surf, attribute, value);
+}
+
 
 static EGLBoolean
-haiku_add_configs_for_visuals(struct _egl_display *disp)
+haiku_swap_interval(struct _egl_display *disp, struct _egl_surface *surf,
+                    EGLint interval)
 {
-   CALLED();
+   (void)disp;
 
-   struct haiku_egl_config *conf;
-   conf = (struct haiku_egl_config *)calloc(1, sizeof(*conf));
-   if (!conf)
-      return _eglError(EGL_BAD_ALLOC, "haiku_add_configs_for_visuals");
+   if (interval < surf->Config->MinSwapInterval
+       || interval > surf->Config->MaxSwapInterval)
+      return _eglError(EGL_BAD_PARAMETER, "Haiku: invalid swap interval");
 
-   _eglInitConfig(&conf->base, disp, 1);
-   TRACE("Config inited\n");
-
-   conf->base.RedSize = 8;
-   conf->base.BlueSize = 8;
-   conf->base.GreenSize = 8;
-   conf->base.LuminanceSize = 0;
-   conf->base.AlphaSize = 8;
-   conf->base.ColorBufferType = EGL_RGB_BUFFER;
-   conf->base.BufferSize = conf->base.RedSize + conf->base.GreenSize +
-                           conf->base.BlueSize + conf->base.AlphaSize;
-   conf->base.ConfigCaveat = EGL_NONE;
-   conf->base.ConfigID = 1;
-   conf->base.BindToTextureRGB = EGL_FALSE;
-   conf->base.BindToTextureRGBA = EGL_FALSE;
-   conf->base.StencilSize = 8;
-   conf->base.TransparentType = EGL_NONE;
-   conf->base.NativeRenderable = EGL_TRUE; // Let's say yes
-   conf->base.NativeVisualID = 0;          // No visual
-   conf->base.NativeVisualType = EGL_NONE; // No visual
-   conf->base.RenderableType = EGL_OPENGL_BIT;
-   conf->base.SampleBuffers = 0; // TODO: How to get the right value ?
-   conf->base.Samples = conf->base.SampleBuffers == 0 ? 0 : 0;
-   conf->base.DepthSize = 24;
-   conf->base.Level = 0;
-   conf->base.MaxPbufferWidth = _EGL_MAX_PBUFFER_WIDTH;
-   conf->base.MaxPbufferHeight = _EGL_MAX_PBUFFER_HEIGHT;
-   conf->base.MaxPbufferPixels = 0; // TODO: How to get the right value ?
-   conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
-
-   TRACE("Config configuated\n");
-   if (!_eglValidateConfig(&conf->base, EGL_FALSE)) {
-      _eglLog(_EGL_DEBUG, "Haiku: failed to validate config");
-      goto cleanup;
-   }
-   TRACE("Validated config\n");
-
-   _eglLinkConfig(&conf->base);
-   if (!_eglGetArraySize(disp->Configs)) {
-      _eglLog(_EGL_WARNING, "Haiku: failed to create any config");
-      goto cleanup;
-   }
-   TRACE("Config successful\n");
-
+   /*
+    * BitmapHook has no portable compositor/vblank primitive. Keep the EGL
+    * interval state but do not fake synchronization with a CPU sleep.
+    */
+   surf->SwapInterval = interval;
    return EGL_TRUE;
+}
 
-cleanup:
-   free(conf);
-   return EGL_FALSE;
+
+// #pragma mark EGLDisplay
+
+static bool
+haiku_format_supported(struct pipe_screen *screen, enum pipe_format format,
+                       unsigned bind)
+{
+   return screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, 0,
+                                      bind);
+}
+
+
+static bool
+haiku_config_supported(struct pipe_screen *screen, EGLint alpha,
+                       EGLint depth, EGLint stencil)
+{
+   enum pipe_format color = alpha ? PIPE_FORMAT_BGRA8888_UNORM
+                                  : PIPE_FORMAT_BGRX8888_UNORM;
+
+   if (!haiku_format_supported(screen, color, PIPE_BIND_RENDER_TARGET |
+                                           PIPE_BIND_DISPLAY_TARGET))
+      return false;
+
+   enum pipe_format depthStencil = PIPE_FORMAT_NONE;
+   if (depth && stencil)
+      depthStencil = PIPE_FORMAT_Z24_UNORM_S8_UINT;
+   else if (depth)
+      depthStencil = PIPE_FORMAT_Z24X8_UNORM;
+   else if (stencil)
+      depthStencil = PIPE_FORMAT_X24S8_UINT;
+
+   if (depthStencil != PIPE_FORMAT_NONE
+       && !haiku_format_supported(screen, depthStencil,
+                                  PIPE_BIND_DEPTH_STENCIL))
+      return false;
+
+   return true;
+}
+
+
+static EGLBoolean
+haiku_add_configs_for_visuals(struct _egl_display *disp,
+                              struct pipe_screen *screen)
+{
+   const struct {
+      EGLint id;
+      EGLint alpha;
+      EGLint depth;
+      EGLint stencil;
+   } variants[] = {
+      { 1, 8, 24, 8 },
+      { 2, 8, 24, 0 },
+      { 3, 0, 24, 8 },
+      { 4, 0, 24, 0 },
+      { 5, 8, 0, 0 },
+   };
+
+   for (unsigned i = 0; i < ARRAY_SIZE(variants); i++) {
+      struct haiku_egl_config *conf;
+
+      if (!haiku_config_supported(screen, variants[i].alpha,
+                                  variants[i].depth, variants[i].stencil))
+         continue;
+
+      conf = (struct haiku_egl_config *)calloc(1, sizeof(*conf));
+      if (conf == NULL)
+         return _eglError(EGL_BAD_ALLOC, "Haiku: config allocation failed");
+
+      _eglInitConfig(&conf->base, disp, variants[i].id);
+      conf->base.RedSize = 8;
+      conf->base.GreenSize = 8;
+      conf->base.BlueSize = 8;
+      conf->base.AlphaSize = variants[i].alpha;
+      conf->base.ColorBufferType = EGL_RGB_BUFFER;
+      conf->base.BufferSize = 24 + variants[i].alpha;
+      conf->base.ConfigCaveat = EGL_NONE;
+      conf->base.BindToTextureRGB = EGL_FALSE;
+      conf->base.BindToTextureRGBA = EGL_FALSE;
+      conf->base.DepthSize = variants[i].depth;
+      conf->base.StencilSize = variants[i].stencil;
+      conf->base.TransparentType = EGL_NONE;
+      conf->base.NativeRenderable = EGL_TRUE;
+      conf->base.NativeVisualID = 0;
+      conf->base.NativeVisualType = EGL_NONE;
+      conf->base.RenderableType = EGL_OPENGL_BIT;
+      conf->base.SampleBuffers = 0;
+      conf->base.Samples = 0;
+      conf->base.Level = 0;
+      conf->base.MaxPbufferWidth = _EGL_MAX_PBUFFER_WIDTH;
+      conf->base.MaxPbufferHeight = _EGL_MAX_PBUFFER_HEIGHT;
+      conf->base.MaxPbufferPixels = _EGL_MAX_PBUFFER_WIDTH *
+                                    _EGL_MAX_PBUFFER_HEIGHT;
+      conf->base.MinSwapInterval = 0;
+      conf->base.MaxSwapInterval = 1;
+      conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+
+      if (!_eglValidateConfig(&conf->base, EGL_FALSE)) {
+         free(conf);
+         continue;
+      }
+
+      _eglLinkConfig(&conf->base);
+   }
+
+   return _eglGetArraySize(disp->Configs) != 0;
 }
 
 static void
@@ -427,11 +497,7 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
       return _eglError(EGL_BAD_ALLOC, "Haiku: creating HGL display");
    }
 
-   if (!screen->is_format_supported(screen, PIPE_FORMAT_BGRA8888_UNORM,
-          PIPE_TEXTURE_2D, 0, 0,
-          PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET)
-       || !screen->is_format_supported(screen, PIPE_FORMAT_Z24_UNORM_S8_UINT,
-          PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_DEPTH_STENCIL)) {
+   if (!haiku_add_configs_for_visuals(disp, screen)) {
       hgl_destroy_display(hgl_dpy->disp);
       hgl_dpy->disp = NULL;
       screen->destroy(screen);
@@ -444,12 +510,13 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
    if (_eglIsApiValid(EGL_OPENGL_API))
       disp->ClientAPIs |= EGL_OPENGL_BIT;
 
-   if (!haiku_add_configs_for_visuals(disp)) {
+   if (_eglGetArraySize(disp->Configs) == 0) {
       hgl_destroy_display(hgl_dpy->disp);
       hgl_dpy->disp = NULL;
       screen->destroy(screen);
       free(hgl_dpy);
-      return EGL_FALSE;
+      return _eglError(EGL_NOT_INITIALIZED,
+                       "Haiku: no supported EGL framebuffer configs");
    }
 
    hgl_dpy->ref_count = 1;
@@ -599,5 +666,7 @@ extern "C" const struct _egl_driver Driver = {
    .CreatePixmapSurface = haiku_create_pixmap_surface,
    .CreatePbufferSurface = haiku_create_pbuffer_surface,
    .DestroySurface = haiku_destroy_surface,
+   .QuerySurface = haiku_query_surface,
+   .SwapInterval = haiku_swap_interval,
    .SwapBuffers = haiku_swap_buffers,
 };
