@@ -80,6 +80,7 @@ haiku_visual_options(const struct _egl_config *conf, bool double_buffer)
 struct haiku_egl_display {
    int ref_count;
    struct hgl_display *disp;
+   struct sw_winsys *winsys;
 };
 
 struct haiku_egl_config {
@@ -464,6 +465,11 @@ haiku_display_destroy(struct _egl_display *disp)
          screen->destroy(screen);
    }
 
+   if (hgl_dpy->winsys != NULL) {
+      hgl_dpy->winsys->destroy(hgl_dpy->winsys);
+      hgl_dpy->winsys = NULL;
+   }
+
    disp->DriverDisplay = NULL;
    free(hgl_dpy);
 }
@@ -487,14 +493,17 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
 
    screen = sw_screen_create(winsys);
    if (screen == NULL) {
-      /* sw_screen_create owns the winsys once it has been called. */
+      winsys->destroy(winsys);
       free(hgl_dpy);
       return _eglError(EGL_NOT_INITIALIZED, "Haiku: creating llvmpipe screen");
    }
 
+   hgl_dpy->winsys = winsys;
    hgl_dpy->disp = hgl_create_display(screen);
    if (hgl_dpy->disp == NULL) {
       screen->destroy(screen);
+      winsys->destroy(winsys);
+      hgl_dpy->winsys = NULL;
       free(hgl_dpy);
       return _eglError(EGL_BAD_ALLOC, "Haiku: creating HGL display");
    }
