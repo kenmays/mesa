@@ -588,9 +588,20 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
    if (!_eglInitContext(&context->base, disp, conf, share_list, attrib_list))
       goto cleanup;
 
-   context->ctx = hgl_create_context(
+   struct hgl_context_attribs hgl_attribs = {};
+   if (context->base.ClientAPI != EGL_OPENGL_API) {
+      _eglError(EGL_BAD_API, "Haiku: only desktop OpenGL is supported");
+      goto cleanup;
+   }
+
+   hgl_attribs.profile = API_OPENGL_COMPAT;
+   hgl_attribs.major = context->base.ClientMajorVersion;
+   hgl_attribs.minor = context->base.ClientMinorVersion;
+
+   context->ctx = hgl_create_context_with_attribs(
       hgl_dpy->disp, &visual,
-      share_list == NULL ? NULL : haiku_egl_context(share_list)->ctx->st);
+      share_list == NULL ? NULL : haiku_egl_context(share_list)->ctx->st,
+      &hgl_attribs);
    if (context->ctx == NULL)
       goto cleanup;
 
