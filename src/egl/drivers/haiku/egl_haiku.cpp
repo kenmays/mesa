@@ -71,7 +71,8 @@ _EGL_DRIVER_STANDARD_TYPECASTS(haiku_egl)
 class HaikuNativeSurface : public BitmapHook {
 public:
    explicit HaikuNativeSurface(BitmapHook *window)
-      : fWindow(window), fMutexInitialized(false)
+      : fWindow(window), fMutexInitialized(false), fAttachedBitmap(NULL),
+        fWidth(0), fHeight(0), fGeneration(0), fLost(false)
    {
       if (fWindow != NULL)
          fMutexInitialized = mtx_init(&fMutex, mtx_plain) == thrd_success;
@@ -79,8 +80,12 @@ public:
 
    ~HaikuNativeSurface() override
    {
-      if (fMutexInitialized)
+      if (fMutexInitialized) {
+         mtx_lock(&fMutex);
+         DetachLocked();
+         mtx_unlock(&fMutex);
          mtx_destroy(&fMutex);
+      }
    }
 
    bool IsValid() const
@@ -97,27 +102,81 @@ public:
       }
 
       mtx_lock(&fMutex);
-      fWindow->GetSize(width, height);
+      RefreshSizeLocked();
+      width = fWidth;
+      height = fHeight;
       mtx_unlock(&fMutex);
    }
 
    BBitmap *SetBitmap(BBitmap *bitmap) override
    {
-      BBitmap *previous;
+      BBitmap *previous = NULL;
 
       if (!IsValid())
          return NULL;
 
       mtx_lock(&fMutex);
-      previous = fWindow->SetBitmap(bitmap);
+      RefreshSizeLocked();
+
+      if (bitmap == NULL) {
+         previous = DetachLocked();
+      } else if (!fLost) {
+         BRect bounds = bitmap->Bounds();
+         uint32_t bitmapWidth = bounds.IntegerWidth() + 1;
+         uint32_t bitmapHeight = bounds.IntegerHeight() + 1;
+
+         if (bitmapWidth == fWidth && bitmapHeight == fHeight) {
+            if (bitmap == fAttachedBitmap) {
+               previous = bitmap;
+            } else {
+               previous = fWindow->SetBitmap(bitmap);
+               fAttachedBitmap = bitmap;
+               ++fGeneration;
+            }
+         }
+      }
+
       mtx_unlock(&fMutex);
       return previous;
    }
 
 private:
+   void RefreshSizeLocked()
+   {
+      uint32_t width = 0;
+      uint32_t height = 0;
+
+      fWindow->GetSize(width, height);
+      if (width != fWidth || height != fHeight) {
+         DetachLocked();
+         fWidth = width;
+         fHeight = height;
+         fLost = width == 0 || height == 0;
+         ++fGeneration;
+      }
+   }
+
+   BBitmap *DetachLocked()
+   {
+      BBitmap *previous = NULL;
+
+      if (fAttachedBitmap != NULL) {
+         previous = fWindow->SetBitmap(NULL);
+         fAttachedBitmap = NULL;
+         ++fGeneration;
+      }
+
+      return previous;
+   }
+
    BitmapHook *fWindow;
    mtx_t fMutex;
    bool fMutexInitialized;
+   BBitmap *fAttachedBitmap;
+   uint32_t fWidth;
+   uint32_t fHeight;
+   uint64_t fGeneration;
+   bool fLost;
 };
 
 static unsigned
