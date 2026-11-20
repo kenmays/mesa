@@ -35,6 +35,7 @@ public:
         fScreen(nullptr), fDisplay(nullptr),
         fFramebuffer(nullptr), fContext(nullptr), fBitmap(nullptr),
         fMutexInitialized(false), fReady(false), fCurrent(false),
+        fPendingPresent(false),
         fWidth(0), fHeight(0)
    {
       if (view == nullptr || dispatcher == nullptr
@@ -156,7 +157,10 @@ public:
             st_context_flush(fContext->st, ST_FLUSH_FRONT, nullptr, nullptr,
                              nullptr);
             present = true;
+         } else if (fPendingPresent) {
+            present = true;
          }
+         fPendingPresent = false;
          MakeNotCurrent();
          mtx_unlock(&fMutex);
       }
@@ -203,9 +207,12 @@ public:
          st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
       }
 
+      const bool presentNow = didPresent && !fCurrent;
+      if (didPresent && fCurrent)
+         fPendingPresent = true;
       mtx_unlock(&fMutex);
-      /* Detaching/resizing can proceed once the referenced bitmap is pinned. */
-      if (didPresent)
+      /* Never acquire the BWindow looper while holding the renderer lock. */
+      if (presentNow)
          PresentBitmap();
    }
 
@@ -315,6 +322,7 @@ private:
    bool fMutexInitialized;
    bool fReady;
    bool fCurrent;
+   bool fPendingPresent;
    uint32_t fWidth;
    uint32_t fHeight;
 };
