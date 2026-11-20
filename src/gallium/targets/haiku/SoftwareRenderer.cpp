@@ -201,7 +201,6 @@ public:
 
          pipe_resource_reference(&back, nullptr);
          st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
-         PresentBitmap();
       }
 
       mtx_unlock(&fMutex);
