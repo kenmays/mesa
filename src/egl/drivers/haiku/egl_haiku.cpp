@@ -388,7 +388,7 @@ haiku_add_configs_for_visuals(struct _egl_display *disp,
       { 5, 8, 0, 0 },
    };
 
-   for (unsigned i = 0; i < ARRAY_SIZE(variants); i++) {
+   for (unsigned i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
       struct haiku_egl_config *conf;
 
       if (!haiku_config_supported(screen, variants[i].alpha,
@@ -614,16 +614,25 @@ haiku_destroy_context(struct _egl_display *disp, struct _egl_context *ctx)
 }
 
 static EGLBoolean
-haiku_make_current(struct _egl_display *disp, struct _egl_surface *dsurf, struct _egl_surface *rsurf,
-                   struct _egl_context *ctx)
+haiku_make_current(struct _egl_display *disp, struct _egl_surface *dsurf,
+                   struct _egl_surface *rsurf, struct _egl_context *ctx)
 {
-   CALLED();
-
-   struct haiku_egl_context *hgl_ctx = haiku_egl_context(ctx);
-   struct haiku_egl_surface *hgl_dsurf = haiku_egl_surface(dsurf);
-   struct haiku_egl_surface *hgl_rsurf = haiku_egl_surface(rsurf);
+   struct haiku_egl_context *hgl_ctx =
+      ctx != NULL ? haiku_egl_context(ctx) : NULL;
+   struct haiku_egl_surface *hgl_dsurf =
+      dsurf != NULL ? haiku_egl_surface(dsurf) : NULL;
+   struct haiku_egl_surface *hgl_rsurf =
+      rsurf != NULL ? haiku_egl_surface(rsurf) : NULL;
    struct _egl_context *old_ctx;
    struct _egl_surface *old_dsurf, *old_rsurf;
+
+   CALLED();
+
+   if ((dsurf != NULL && dsurf->Display != disp)
+       || (rsurf != NULL && rsurf->Display != disp)) {
+      _eglError(EGL_BAD_MATCH, "Haiku: surface belongs to another display");
+      return EGL_FALSE;
+   }
 
    if (!_eglBindContext(ctx, dsurf, rsurf, &old_ctx, &old_dsurf, &old_rsurf))
       return EGL_FALSE;
@@ -638,7 +647,22 @@ haiku_make_current(struct _egl_display *disp, struct _egl_surface *dsurf, struct
    if (ctx == NULL) {
       st_api_make_current(NULL, NULL, NULL);
    } else {
-      if (dsurf != NULL && dsurf != old_dsurf)
+      if (hgl_ctx == NULL || hgl_ctx->ctx == NULL) {
+         _eglError(EGL_BAD_CONTEXT, "Haiku: invalid context");
+         return EGL_FALSE;
+      }
+
+      if (dsurf != NULL && hgl_dsurf == NULL) {
+         _eglError(EGL_BAD_SURFACE, "Haiku: invalid draw surface");
+         return EGL_FALSE;
+      }
+
+      if (rsurf != NULL && hgl_rsurf == NULL) {
+         _eglError(EGL_BAD_SURFACE, "Haiku: invalid read surface");
+         return EGL_FALSE;
+      }
+
+      if (hgl_dsurf != NULL && dsurf != old_dsurf)
          update_size(hgl_dsurf->fb);
 
       st_api_make_current(hgl_ctx->ctx->st,
