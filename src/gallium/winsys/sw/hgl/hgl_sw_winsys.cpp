@@ -200,7 +200,7 @@ hgl_winsys_displaytarget_create(struct sw_winsys *winsys,
             space,
             (uint32)alignedStride);
 
-        if (target->bitmap == NULL || !target->bitmap->IsValid()
+        if (target->bitmap == NULL || target->bitmap->InitCheck() != B_OK
             || target->bitmap->Bits() == NULL) {
             delete target->bitmap;
             FREE(target);
