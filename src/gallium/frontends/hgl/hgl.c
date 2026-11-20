@@ -195,6 +195,25 @@ hgl_st_framebuffer_validate(struct st_context *st,
             goto done;
     }
 
+    /*
+     * A native view may still reference the current front/back bitmap even
+     * when the state tracker no longer requests that attachment. Detach it
+     * before dropping or replacing any native display-target resource.
+     */
+    if (buffer->winsysContext != NULL) {
+        bool native_target_changed = false;
+
+        for (i = ST_ATTACHMENT_FRONT_LEFT; i <= ST_ATTACHMENT_BACK_RIGHT; i++) {
+            if (buffer->textures[i] != replacement[i]) {
+                native_target_changed = true;
+                break;
+            }
+        }
+
+        if (native_target_changed)
+            hgl_winsys_detach_native_surface(buffer->winsysContext);
+    }
+
     /* Commit the new attachment set only after every allocation succeeded. */
     for (i = 0; i < ST_ATTACHMENT_COUNT; i++) {
         pipe_resource_reference(&buffer->textures[i], replacement[i]);
