@@ -52,8 +52,6 @@ public:
       fMutexInitialized = true;
 
       if (mtx_init(&fPresentMutex, mtx_plain) != thrd_success) {
-         cnd_destroy(&fPresentCondition);
-         mtx_destroy(&fPresentMutex);
          mtx_destroy(&fBitmapMutex);
          mtx_destroy(&fMutex);
          fMutexInitialized = false;
@@ -153,6 +151,8 @@ public:
          fScreen = nullptr;
       }
       if (fMutexInitialized) {
+         cnd_destroy(&fPresentCondition);
+         mtx_destroy(&fPresentMutex);
          mtx_destroy(&fBitmapMutex);
          mtx_destroy(&fMutex);
          fMutexInitialized = false;
