@@ -35,7 +35,8 @@ public:
         fScreen(nullptr), fDisplay(nullptr),
         fFramebuffer(nullptr), fContext(nullptr), fBitmap(nullptr),
         fMutexInitialized(false), fReady(false), fCurrent(false),
-        fPendingPresent(false),
+        fPendingPresent(false), fPresentThreadStarted(false),
+        fPresentQueued(false), fStopPresentThread(false),
         fWidth(0), fHeight(0)
    {
       if (view == nullptr || dispatcher == nullptr
@@ -49,6 +50,32 @@ public:
          return;
       }
       fMutexInitialized = true;
+
+      if (mtx_init(&fPresentMutex, mtx_plain) != thrd_success) {
+         cnd_destroy(&fPresentCondition);
+         mtx_destroy(&fPresentMutex);
+         mtx_destroy(&fBitmapMutex);
+         mtx_destroy(&fMutex);
+         fMutexInitialized = false;
+         return;
+      }
+      if (cnd_init(&fPresentCondition) != thrd_success) {
+         mtx_destroy(&fPresentMutex);
+         mtx_destroy(&fBitmapMutex);
+         mtx_destroy(&fMutex);
+         fMutexInitialized = false;
+         return;
+      }
+      if (thrd_create(&fPresentThread, PresentThreadEntry, this)
+          != thrd_success) {
+         cnd_destroy(&fPresentCondition);
+         mtx_destroy(&fPresentMutex);
+         mtx_destroy(&fBitmapMutex);
+         mtx_destroy(&fMutex);
+         fMutexInitialized = false;
+         return;
+      }
+      fPresentThreadStarted = true;
 
       BRect initialBounds = view->Bounds();
       if (initialBounds.IsValid()) {
@@ -90,6 +117,15 @@ public:
 
    ~HaikuSoftwareRenderer() override
    {
+      if (fPresentThreadStarted) {
+         mtx_lock(&fPresentMutex);
+         fStopPresentThread = true;
+         cnd_signal(&fPresentCondition);
+         mtx_unlock(&fPresentMutex);
+         thrd_join(fPresentThread, nullptr);
+         fPresentThreadStarted = false;
+      }
+
       if (fMutexInitialized) {
          mtx_lock(&fMutex);
          if (fCurrent) {
@@ -166,7 +202,7 @@ public:
       }
       /* Never acquire the BWindow looper while holding the renderer lock. */
       if (present)
-         PresentBitmap();
+         QueuePresent();
       BGLRenderer::UnlockGL();
    }
 
@@ -213,7 +249,7 @@ public:
       mtx_unlock(&fMutex);
       /* Never acquire the BWindow looper while holding the renderer lock. */
       if (presentNow)
-         PresentBitmap();
+         QueuePresent();
    }
 
    void Draw(BRect updateRect) override
@@ -291,19 +327,51 @@ public:
    }
 
 private:
-   void PresentBitmap()
+   static int PresentThreadEntry(void *arg)
    {
-      if (GLView()->LockLooperWithTimeout(1000000) != B_OK)
+      return static_cast<HaikuSoftwareRenderer *>(arg)->PresentThread();
+   }
+
+   int PresentThread()
+   {
+      mtx_lock(&fPresentMutex);
+      while (!fStopPresentThread) {
+         while (!fPresentQueued && !fStopPresentThread)
+            cnd_wait(&fPresentCondition, &fPresentMutex);
+
+         if (fStopPresentThread)
+            break;
+
+         fPresentQueued = false;
+         mtx_unlock(&fPresentMutex);
+
+         /*
+          * This worker runs outside BGLView::LockGL/UnlockGL, so it can
+          * safely acquire the window looper and schedule the normal Draw()
+          * callback without inverting the display-lock/looper-lock order.
+          */
+         if (GLView()->LockLooperWithTimeout(1000000) == B_OK) {
+            GLView()->Invalidate();
+            GLView()->UnlockLooper();
+         }
+
+         mtx_lock(&fPresentMutex);
+      }
+      mtx_unlock(&fPresentMutex);
+      return 0;
+   }
+
+   void QueuePresent()
+   {
+      if (!fPresentThreadStarted)
          return;
 
-      /*
-       * BView drawing belongs in the view's Draw() callback. Invalidate
-       * schedules that callback on the window looper without drawing from
-       * the GL worker thread or bypassing BGLView's normal draw lifecycle.
-       */
-      GLView()->Invalidate();
-
-      GLView()->UnlockLooper();
+      mtx_lock(&fPresentMutex);
+      if (!fStopPresentThread) {
+         fPresentQueued = true;
+         cnd_signal(&fPresentCondition);
+      }
+      mtx_unlock(&fPresentMutex);
    }
 
    void MakeNotCurrent()
@@ -321,10 +389,16 @@ private:
    BBitmap *fBitmap;
    mtx_t fMutex;
    mtx_t fBitmapMutex;
+   mtx_t fPresentMutex;
+   cnd_t fPresentCondition;
+   thrd_t fPresentThread;
    bool fMutexInitialized;
    bool fReady;
    bool fCurrent;
    bool fPendingPresent;
+   bool fPresentThreadStarted;
+   bool fPresentQueued;
+   bool fStopPresentThread;
    uint32_t fWidth;
    uint32_t fHeight;
 };
