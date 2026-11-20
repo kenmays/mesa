@@ -256,8 +256,9 @@ haiku_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
    }
 
    wgl_surf->is_window = true;
-   wgl_surf->fb = hgl_create_st_framebuffer(hgl_dpy->disp, &visual,
-                                             wgl_surf->native_surface);
+   wgl_surf->fb = hgl_create_st_framebuffer(
+      hgl_dpy->disp, &visual,
+      static_cast<BitmapHook *>(wgl_surf->native_surface));
    if (!wgl_surf->fb) {
       delete wgl_surf->native_surface;
       free(wgl_surf);
