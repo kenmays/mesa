@@ -9,6 +9,8 @@ libswpipe = shared_library(
     include_directories('../../frontends/hgl'),
     include_directories('../../winsys/sw/hgl'),
     include_directories('/boot/system/develop/headers/os/opengl'),
+    include_directories('/boot/system/develop/headers/private'),
+    include_directories('/boot/system/develop/headers/private/opengl'),
   ],
   gnu_symbol_visibility : 'hidden',
   link_args : [ld_args_bsymbolic, ld_args_gc_sections],
