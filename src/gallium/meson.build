@@ -236,6 +236,7 @@ if with_dri
 endif
 if with_platform_haiku
   subdir('frontends/hgl')
+  subdir('targets/haiku')
 endif
 if with_platform_windows
   if with_opengl
