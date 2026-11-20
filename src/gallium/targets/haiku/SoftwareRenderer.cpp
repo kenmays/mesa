@@ -11,7 +11,6 @@
 #include <algorithm>
 
 #include <GLRenderer.h>
-#include <GLDispatcher.h>
 #include <GLView.h>
 #include <Bitmap.h>
 #include <private/opengl/GLDispatcher.h>
@@ -19,6 +18,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_screen.h"
 #include "util/u_inlines.h"
+#include "util/u_atomic.h"
 #include "util/u_thread.h"
 #include "state_tracker/st_context.h"
 #include "hgl_context.h"
@@ -249,7 +249,6 @@ private:
    void MakeNotCurrent()
    {
       st_api_make_current(nullptr, nullptr, nullptr);
-      GLDispatcher()->SetTable(nullptr);
       fCurrent = false;
    }
 
