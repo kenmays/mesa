@@ -146,9 +146,11 @@ public:
    void UnlockGL() override
    {
       if (fReady && fCurrent) {
-         if ((Options() & HGL_DOUBLE) == 0)
+         if ((Options() & HGL_DOUBLE) == 0) {
             st_context_flush(fContext->st, ST_FLUSH_FRONT, nullptr, nullptr,
                              nullptr);
+            PresentBitmap();
+         }
          MakeNotCurrent();
          mtx_unlock(&fMutex);
       }
@@ -189,6 +191,7 @@ public:
 
          pipe_resource_reference(&back, nullptr);
          st_context_invalidate_state(fContext->st, ST_INVALIDATE_FB_STATE);
+         PresentBitmap();
       }
 
       mtx_unlock(&fMutex);
@@ -264,6 +267,19 @@ public:
    }
 
 private:
+   void PresentBitmap()
+   {
+      if (GLView()->LockLooperWithTimeout(1000000) != B_OK)
+         return;
+
+      mtx_lock(&fBitmapMutex);
+      if (fBitmap != nullptr)
+         GLView()->DrawBitmap(fBitmap, B_ORIGIN);
+      mtx_unlock(&fBitmapMutex);
+
+      GLView()->UnlockLooper();
+   }
+
    void MakeNotCurrent()
    {
       st_api_make_current(nullptr, nullptr, nullptr);
