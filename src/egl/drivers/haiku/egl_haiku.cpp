@@ -582,6 +582,8 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
       hgl_destroy_display(hgl_dpy->disp);
       hgl_dpy->disp = NULL;
       screen->destroy(screen);
+      winsys->destroy(winsys);
+      hgl_dpy->winsys = NULL;
       free(hgl_dpy);
       return _eglError(EGL_NOT_INITIALIZED,
                        "Haiku: required framebuffer formats unavailable");
