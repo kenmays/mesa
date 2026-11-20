@@ -301,6 +301,8 @@ hgl_destroy_st_framebuffer(struct hgl_buffer *buffer)
 
     if (buffer->mutex_initialized) {
         mtx_lock(&buffer->mutex);
+        if (buffer->winsysContext != NULL)
+            hgl_winsys_detach_native_surface(buffer->winsysContext);
         for (i = 0; i < ST_ATTACHMENT_COUNT; i++)
             pipe_resource_reference(&buffer->textures[i], NULL);
         mtx_unlock(&buffer->mutex);
