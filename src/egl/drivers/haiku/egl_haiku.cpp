@@ -229,6 +229,11 @@ haiku_swap_buffers(struct _egl_display *disp, struct _egl_surface *surf)
 {
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
    struct haiku_egl_surface *hgl_surf = haiku_egl_surface(surf);
+   if (hgl_surf->fb == NULL)
+      return EGL_FALSE;
+   if (hgl_surf->fb->winsysContext == NULL)
+      return EGL_TRUE;
+
    struct haiku_egl_context *hgl_ctx = haiku_egl_context(surf->CurrentContext);
    if (hgl_ctx == NULL)
       return EGL_FALSE;
@@ -341,20 +346,28 @@ cleanup:
 static void
 haiku_display_destroy(struct _egl_display *disp)
 {
-   if (!disp)
+   struct haiku_egl_display *hgl_dpy;
+
+   if (disp == NULL)
       return;
 
-   struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
+   hgl_dpy = haiku_egl_display(disp);
+   if (hgl_dpy == NULL)
+      return;
 
    assert(hgl_dpy->ref_count > 0);
    if (!p_atomic_dec_zero(&hgl_dpy->ref_count))
       return;
 
-   struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
-   hgl_destroy_display(hgl_dpy->disp);
-   hgl_dpy->disp = NULL;
-   screen->destroy(screen); // destroy will deallocate object
+   if (hgl_dpy->disp != NULL) {
+      struct pipe_screen *screen = hgl_dpy->disp->fscreen->screen;
+      hgl_destroy_display(hgl_dpy->disp);
+      hgl_dpy->disp = NULL;
+      if (screen != NULL)
+         screen->destroy(screen);
+   }
 
+   disp->DriverDisplay = NULL;
    free(hgl_dpy);
 }
 
@@ -362,40 +375,60 @@ static EGLBoolean
 haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
 {
    struct haiku_egl_display *hgl_dpy;
+   struct sw_winsys *winsys;
+   struct pipe_screen *screen;
 
-   hgl_dpy =
-      (struct haiku_egl_display *)calloc(1, sizeof(struct haiku_egl_display));
-   if (!hgl_dpy)
+   hgl_dpy = (struct haiku_egl_display *)calloc(1, sizeof(*hgl_dpy));
+   if (hgl_dpy == NULL)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
-   hgl_dpy->ref_count = 1;
-   disp->DriverDisplay = (void *)hgl_dpy;
+   winsys = hgl_create_sw_winsys();
+   if (winsys == NULL) {
+      free(hgl_dpy);
+      return _eglError(EGL_BAD_ALLOC, "Haiku: creating software winsys");
+   }
 
-   struct sw_winsys *winsys = hgl_create_sw_winsys();
-   struct pipe_screen *screen = sw_screen_create(winsys);
+   screen = sw_screen_create(winsys);
+   if (screen == NULL) {
+      /* sw_screen_create owns the winsys once it has been called. */
+      free(hgl_dpy);
+      return _eglError(EGL_NOT_INITIALIZED, "Haiku: creating llvmpipe screen");
+   }
+
    hgl_dpy->disp = hgl_create_display(screen);
+   if (hgl_dpy->disp == NULL) {
+      screen->destroy(screen);
+      free(hgl_dpy);
+      return _eglError(EGL_BAD_ALLOC, "Haiku: creating HGL display");
+   }
 
-   disp->ClientAPIs = 0;
-   if (_eglIsApiValid(EGL_OPENGL_API))
-      disp->ClientAPIs |= EGL_OPENGL_BIT;
-
-   /* Optional EGL extensions and GLES remain disabled until implemented. */
-   if (!hgl_dpy->disp->fscreen->screen->is_format_supported(
-          hgl_dpy->disp->fscreen->screen, PIPE_FORMAT_BGRA8888_UNORM,
+   if (!screen->is_format_supported(screen, PIPE_FORMAT_BGRA8888_UNORM,
           PIPE_TEXTURE_2D, 0, 0,
           PIPE_BIND_RENDER_TARGET | PIPE_BIND_DISPLAY_TARGET)
-       || !hgl_dpy->disp->fscreen->screen->is_format_supported(
-          hgl_dpy->disp->fscreen->screen, PIPE_FORMAT_Z24_UNORM_S8_UINT,
+       || !screen->is_format_supported(screen, PIPE_FORMAT_Z24_UNORM_S8_UINT,
           PIPE_TEXTURE_2D, 0, 0, PIPE_BIND_DEPTH_STENCIL)) {
       hgl_destroy_display(hgl_dpy->disp);
       hgl_dpy->disp = NULL;
+      screen->destroy(screen);
       free(hgl_dpy);
       return _eglError(EGL_NOT_INITIALIZED,
                        "Haiku: required framebuffer formats unavailable");
    }
 
-   haiku_add_configs_for_visuals(disp);
+   disp->ClientAPIs = 0;
+   if (_eglIsApiValid(EGL_OPENGL_API))
+      disp->ClientAPIs |= EGL_OPENGL_BIT;
 
+   if (!haiku_add_configs_for_visuals(disp)) {
+      hgl_destroy_display(hgl_dpy->disp);
+      hgl_dpy->disp = NULL;
+      screen->destroy(screen);
+      free(hgl_dpy);
+      return EGL_FALSE;
+   }
+
+   hgl_dpy->ref_count = 1;
+   disp->DriverDisplay = (void *)hgl_dpy;
    return EGL_TRUE;
 }
 
@@ -447,9 +480,11 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
    CALLED();
 
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
+   if (hgl_dpy == NULL || hgl_dpy->disp == NULL)
+      return NULL;
 
    struct st_visual visual;
-   hgl_get_st_visual(&visual, HGL_DOUBLE | HGL_DEPTH);
+   hgl_get_st_visual(&visual, haiku_visual_options(conf, true));
 
    struct haiku_egl_context *context =
       (struct haiku_egl_context *)calloc(1, sizeof(*context));
