@@ -7,6 +7,8 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <new>
+#include <algorithm>
 
 #include <GLRenderer.h>
 #include <GLDispatcher.h>
@@ -35,8 +37,15 @@ public:
         fMutexInitialized(false), fReady(false), fCurrent(false),
         fWidth(0), fHeight(0)
    {
-      if (view == nullptr || mtx_init(&fMutex, mtx_plain) != thrd_success)
+      if (view == nullptr || (options & (HGL_ACCUM | HGL_OVERLAY
+          | HGL_UNDERLAY | HGL_SHARE_CONTEXT)) != 0)
          return;
+      if (mtx_init(&fMutex, mtx_plain) != thrd_success)
+         return;
+      if (mtx_init(&fBitmapMutex, mtx_plain) != thrd_success) {
+         mtx_destroy(&fMutex);
+         return;
+      }
       fMutexInitialized = true;
 
       fWinsys = hgl_create_sw_winsys();
@@ -96,6 +105,7 @@ public:
          fScreen = nullptr;
       }
       if (fMutexInitialized) {
+         mtx_destroy(&fBitmapMutex);
          mtx_destroy(&fMutex);
          fMutexInitialized = false;
       }
@@ -116,14 +126,10 @@ public:
       fFramebuffer->newHeight = fHeight;
       mtx_unlock(&fFramebuffer->mutex);
 
-      if (st_api_make_current(fContext->st, &fFramebuffer->base,
-                              &fFramebuffer->base)) {
-         GLDispatcher()->SetTable(fContext->st->ctx->Dispatch.Current);
-         fCurrent = true;
-      } else {
-         GLDispatcher()->SetTable(nullptr);
-         mtx_unlock(&fMutex);
-      }
+      st_api_make_current(fContext->st, &fFramebuffer->base,
+                          &fFramebuffer->base);
+      GLDispatcher()->SetTable(fContext->st->ctx->Dispatch.Current);
+      fCurrent = true;
    }
 
    void UnlockGL() override
@@ -268,7 +274,7 @@ private:
    struct st_visual fVisual;
    BBitmap *fBitmap;
    mtx_t fMutex;
-   mtx_t fBitmapMutex = {};
+   mtx_t fBitmapMutex;
    bool fMutexInitialized;
    bool fReady;
    bool fCurrent;
