@@ -134,6 +134,8 @@ static struct _egl_surface *
 haiku_create_pixmap_surface(struct _egl_display *disp, struct _egl_config *conf,
                             void *native_pixmap, const EGLint *attrib_list)
 {
+   (void)disp;
+   (void)conf;
    (void)native_pixmap;
    (void)attrib_list;
    _eglError(EGL_BAD_MATCH, "Haiku does not support EGL pixmap surfaces");
@@ -144,7 +146,6 @@ static struct _egl_surface *
 haiku_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf,
                              const EGLint *attrib_list)
 {
-   printf("haiku_create_pbuffer_surface\n");
    struct haiku_egl_display *hgl_dpy = haiku_egl_display(disp);
 
    struct haiku_egl_surface *wgl_surf =
@@ -294,7 +295,8 @@ haiku_add_configs_for_visuals(struct _egl_display *disp)
    conf->base.Level = 0;
    conf->base.MaxPbufferWidth = _EGL_MAX_PBUFFER_WIDTH;
    conf->base.MaxPbufferHeight = _EGL_MAX_PBUFFER_HEIGHT;
-   conf->base.MaxPbufferPixels = 0; // TODO: How to get the right value ?
+   conf->base.MaxPbufferPixels =
+      _EGL_MAX_PBUFFER_WIDTH * _EGL_MAX_PBUFFER_HEIGHT;
    conf->base.SurfaceType = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
 
    TRACE("Config configuated\n");
@@ -344,6 +346,7 @@ haiku_display_destroy(struct _egl_display *disp)
 static EGLBoolean
 haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
 {
+   (void)platformDisplay;
    struct haiku_egl_display *hgl_dpy;
 
    hgl_dpy =
