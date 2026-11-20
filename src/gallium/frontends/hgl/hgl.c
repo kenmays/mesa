@@ -210,12 +210,8 @@ hgl_create_st_framebuffer(struct hgl_display *display, struct st_visual* visual,
 	assert(visual);
 
 	buffer = CALLOC_STRUCT(hgl_buffer);
-
-
 	if (!buffer)
-
-
-	   return NULL;
+		return NULL;
 
 	// Prepare our buffer
 	buffer->visual = *visual;
@@ -257,10 +253,8 @@ struct hgl_context*
 hgl_create_context(struct hgl_display *display, struct st_visual* visual, struct st_context* shared)
 {
 	struct hgl_context* context = CALLOC_STRUCT(hgl_context);
-
 	if (!context)
-
-	   return NULL;
+		return NULL;
 	context->display = display;
 
 	struct st_context_attribs attribs;
@@ -305,11 +299,7 @@ hgl_get_st_visual(struct st_visual* visual, ulong options)
 	CALLED();
 
 	assert(visual);
-
-
 	memset(visual, 0, sizeof(*visual));
-
-
 
 	// Determine color format
 	if ((options & HGL_INDEX) != 0) {
@@ -358,27 +348,13 @@ hgl_create_display(struct pipe_screen* screen)
 	struct hgl_display* display;
 
 	display = CALLOC_STRUCT(hgl_display);
-
-
 	if (!display)
-
-
-	   return NULL;
-
-
+		return NULL;
 
 	display->fscreen = CALLOC_STRUCT(pipe_frontend_screen);
-
-
 	if (!display->fscreen) {
-
-
-	   FREE(display);
-
-
-	   return NULL;
-
-
+		FREE(display);
+		return NULL;
 	}
 	display->fscreen->screen = screen;
 	display->fscreen->broken_invalidate = true;
@@ -391,12 +367,12 @@ hgl_create_display(struct pipe_screen* screen)
 void
 hgl_destroy_display(struct hgl_display *display)
 {
-   if (!display)
-      return;
+	if (!display)
+		return;
 
-   if (display->fscreen) {
-      st_screen_destroy(display->fscreen);
-      FREE(display->fscreen);
-   }
-   FREE(display);
+	if (display->fscreen) {
+		st_screen_destroy(display->fscreen);
+		FREE(display->fscreen);
+	}
+	FREE(display);
 }
