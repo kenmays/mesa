@@ -352,7 +352,6 @@ haiku_initialize_impl(struct _egl_display *disp, void *platformDisplay)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
    hgl_dpy->ref_count = 1;
-   disp->DriverDisplay = (void *)hgl_dpy;
 
    struct sw_winsys *winsys = hgl_create_sw_winsys();
    if (winsys == NULL) {
