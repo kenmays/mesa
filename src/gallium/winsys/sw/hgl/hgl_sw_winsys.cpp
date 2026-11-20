@@ -313,6 +313,17 @@ hgl_winsys_displaytarget_display(struct sw_winsys *winsys,
 }
 
 
+extern "C" void
+hgl_winsys_detach_native_surface(void *winsysContext)
+{
+    if (winsysContext == NULL)
+        return;
+
+    BitmapHook *context = (BitmapHook *)winsysContext;
+    context->SetBitmap(NULL);
+}
+
+
 struct sw_winsys *
 hgl_create_sw_winsys()
 {
