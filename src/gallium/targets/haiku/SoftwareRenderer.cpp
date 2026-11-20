@@ -150,15 +150,19 @@ public:
 
    void UnlockGL() override
    {
+      bool present = false;
       if (fReady && fCurrent) {
          if ((Options() & HGL_DOUBLE) == 0) {
             st_context_flush(fContext->st, ST_FLUSH_FRONT, nullptr, nullptr,
                              nullptr);
-            PresentBitmap();
+            present = true;
          }
          MakeNotCurrent();
          mtx_unlock(&fMutex);
       }
+      /* Never acquire the BWindow looper while holding the renderer lock. */
+      if (present)
+         PresentBitmap();
       BGLRenderer::UnlockGL();
    }
 
@@ -181,6 +185,7 @@ public:
          fFramebuffer->textures[ST_ATTACHMENT_BACK_LEFT]);
       mtx_unlock(&fFramebuffer->mutex);
 
+      const bool didPresent = back != nullptr;
       if (back != nullptr) {
          fContext->st->pipe->flush_resource(fContext->st->pipe, back);
          fScreen->flush_frontbuffer(fScreen, fContext->st->pipe, back,
@@ -200,6 +205,9 @@ public:
       }
 
       mtx_unlock(&fMutex);
+      /* Detaching/resizing can proceed once the referenced bitmap is pinned. */
+      if (didPresent)
+         PresentBitmap();
    }
 
    void Draw(BRect updateRect) override
