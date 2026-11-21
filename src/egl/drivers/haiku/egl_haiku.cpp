@@ -199,6 +199,14 @@ haiku_destroy_surface(struct _egl_display *disp, struct _egl_surface *surf)
 static void
 update_size(struct hgl_buffer *buffer)
 {
+   /*
+    * Window framebuffers carry a BitmapHook in winsysContext. Pbuffer
+    * framebuffers are created with a NULL native window and have fixed
+    * dimensions, so there is no hook to query.
+    */
+   if (buffer == NULL || buffer->winsysContext == NULL)
+      return;
+
    uint32_t newWidth, newHeight;
    ((BitmapHook *)buffer->winsysContext)->GetSize(newWidth, newHeight);
    if (buffer->newWidth != newWidth || buffer->newHeight != newHeight) {
