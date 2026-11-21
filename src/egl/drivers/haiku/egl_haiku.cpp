@@ -484,6 +484,16 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
       return NULL;
    }
 
+   /*
+    * Declare these before the cleanup jump: C++ does not allow a goto to
+    * bypass initialization of variables in the same scope.
+    */
+   int major = 0;
+   int minor = 0;
+   int profile = API_OPENGL_COMPAT;
+   unsigned st_flags = 0;
+   unsigned pipe_context_flags = 0;
+
    if (!_eglInitContext(&context->base, disp, conf, share_list, attrib_list))
       goto cleanup;
 
@@ -491,9 +501,8 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
     * EGL's profile mask is only significant for desktop GL 3.2 and newer.
     * Mesa does not expose a compatibility 3.1 profile, so use core for 3.1.
     */
-   int major = context->base.ClientMajorVersion;
-   int minor = context->base.ClientMinorVersion;
-   int profile = API_OPENGL_COMPAT;
+   major = context->base.ClientMajorVersion;
+   minor = context->base.ClientMinorVersion;
    if ((major > 3 || (major == 3 && minor >= 2)) &&
        context->base.Profile == EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR) {
       profile = API_OPENGL_CORE;
@@ -501,8 +510,6 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
       profile = API_OPENGL_CORE;
    }
 
-   unsigned st_flags = 0;
-   unsigned pipe_context_flags = 0;
    if (context->base.Flags & EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR)
       st_flags |= ST_CONTEXT_FLAG_DEBUG;
    if (context->base.Flags & EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR)
