@@ -78,7 +78,10 @@ struct hgl_context
 struct hgl_buffer* hgl_create_st_framebuffer(struct hgl_display *display, struct st_visual* visual, void *winsysContext);
 void hgl_destroy_st_framebuffer(struct hgl_buffer *buffer);
 
-struct hgl_context* hgl_create_context(struct hgl_display *display, struct st_visual* visual, struct st_context* shared);
+struct hgl_context* hgl_create_context(struct hgl_display *display,
+	struct st_visual* visual, struct st_context* shared,
+	int major, int minor, int profile, unsigned flags,
+	unsigned context_flags);
 void hgl_destroy_context(struct hgl_context* context);
 
 // hgl visual
