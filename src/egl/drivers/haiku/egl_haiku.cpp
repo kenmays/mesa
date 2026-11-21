@@ -487,9 +487,37 @@ haiku_create_context(struct _egl_display *disp, struct _egl_config *conf,
    if (!_eglInitContext(&context->base, disp, conf, share_list, attrib_list))
       goto cleanup;
 
+   /*
+    * EGL's profile mask is only significant for desktop GL 3.2 and newer.
+    * Mesa does not expose a compatibility 3.1 profile, so use core for 3.1.
+    */
+   int major = context->base.ClientMajorVersion;
+   int minor = context->base.ClientMinorVersion;
+   int profile = API_OPENGL_COMPAT;
+   if ((major > 3 || (major == 3 && minor >= 2)) &&
+       context->base.Profile == EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT_KHR) {
+      profile = API_OPENGL_CORE;
+   } else if (major == 3 && minor == 1) {
+      profile = API_OPENGL_CORE;
+   }
+
+   unsigned st_flags = 0;
+   unsigned pipe_context_flags = 0;
+   if (context->base.Flags & EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR)
+      st_flags |= ST_CONTEXT_FLAG_DEBUG;
+   if (context->base.Flags & EGL_CONTEXT_OPENGL_FORWARD_COMPATIBLE_BIT_KHR)
+      st_flags |= ST_CONTEXT_FLAG_FORWARD_COMPATIBLE;
+   if (context->base.NoError)
+      st_flags |= ST_CONTEXT_FLAG_NO_ERROR;
+   if (context->base.ReleaseBehavior == EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR)
+      st_flags |= ST_CONTEXT_FLAG_RELEASE_NONE;
+   if (context->base.Flags & EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR)
+      pipe_context_flags |= PIPE_CONTEXT_ROBUST_BUFFER_ACCESS;
+
    context->ctx = hgl_create_context(
       hgl_dpy->disp, &visual,
-      share_list == NULL ? NULL : haiku_egl_context(share_list)->ctx->st);
+      share_list == NULL ? NULL : haiku_egl_context(share_list)->ctx->st,
+      major, minor, profile, st_flags, pipe_context_flags);
    if (context->ctx == NULL)
       goto cleanup;
 
