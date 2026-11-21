@@ -250,7 +250,9 @@ hgl_destroy_st_framebuffer(struct hgl_buffer *buffer)
 
 
 struct hgl_context*
-hgl_create_context(struct hgl_display *display, struct st_visual* visual, struct st_context* shared)
+hgl_create_context(struct hgl_display *display, struct st_visual* visual,
+	struct st_context* shared, int major, int minor, int profile,
+	unsigned flags, unsigned context_flags)
 {
 	struct hgl_context* context = CALLOC_STRUCT(hgl_context);
 	if (!context)
@@ -260,10 +262,12 @@ hgl_create_context(struct hgl_display *display, struct st_visual* visual, struct
 	struct st_context_attribs attribs;
 	memset(&attribs, 0, sizeof(attribs));
 	attribs.options.force_glsl_extensions_warn = false;
-	attribs.profile = API_OPENGL_COMPAT;
+	attribs.profile = (gl_api)profile;
 	attribs.visual = *visual;
-	attribs.major = 1;
-	attribs.minor = 0;
+	attribs.major = major;
+	attribs.minor = minor;
+	attribs.flags = flags;
+	attribs.context_flags = context_flags;
 
 	enum st_context_error result;
 	context->st = st_api_create_context(display->fscreen, &attribs, &result, shared);
